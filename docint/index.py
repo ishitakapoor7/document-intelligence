@@ -20,6 +20,7 @@ import chromadb
 from fastembed import TextEmbedding
 from llama_index.core import Settings, StorageContext, VectorStoreIndex
 from llama_index.core.embeddings import BaseEmbedding
+from llama_index.core.llms import MockLLM
 from llama_index.core.schema import NodeRelationship, RelatedNodeInfo, TextNode
 from llama_index.core.vector_stores import (
     FilterCondition,
@@ -74,7 +75,11 @@ def _configure() -> None:
     if _configured:
         return
     Settings.embed_model = FastEmbedAdapter()
-    Settings.llm = None          # LlamaIndex must never make a model call here
+    # LlamaIndex must never make a model call. `Settings.llm = None` achieves that,
+    # but its resolver then prints "LLM is explicitly disabled. Using MockLLM." to
+    # stdout on every retrieval - above the answer, reading like a warning. Handing it
+    # the MockLLM directly is the same guarantee, stated rather than inferred.
+    Settings.llm = MockLLM()
     _configured = True
 
 
@@ -171,3 +176,19 @@ def build_filters(access_tags: frozenset[str], document_types: list[str] | None)
                  for t in document_types],
     )
     return MetadataFilters(condition=FilterCondition.AND, filters=[access, types])
+
+
+def get_chunks(chunk_ids: list[str], index: VectorStoreIndex | None = None) -> dict[str, dict]:
+    """Resolve chunk IDs back to their text and metadata, straight out of the store.
+
+    This is what makes a citation checkable by hand: the ID printed under an answer
+    is the primary key of the thing it came from, so `show` is a lookup rather than
+    a search. No access filter is applied here - the caller supplies one, because the
+    eval harness legitimately reads chunks no single principal can see.
+    """
+    if not chunk_ids:
+        return {}
+    index = index or open_index()
+    got = index.vector_store.client.get(ids=chunk_ids, include=["documents", "metadatas"])
+    return {cid: {"text": text, **meta}
+            for cid, text, meta in zip(got["ids"], got["documents"], got["metadatas"])}

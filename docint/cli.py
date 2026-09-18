@@ -5,7 +5,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from docint.config import CORPUS_DIR
+from docint.config import ACCESS_PROFILES, CORPUS_DIR
 from docint.ingest import ingest_directory
 from docint.models import IngestOutcome
 
@@ -100,6 +100,52 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ask(args: argparse.Namespace) -> int:
+    from docint.answer import answer_question
+    from docint.trace import render, trace_path
+
+    tags = ACCESS_PROFILES.get(args.as_profile)
+    if tags is None:
+        print(f"unknown profile {args.as_profile!r}; known: {', '.join(sorted(ACCESS_PROFILES))}")
+        return 2
+
+    trace = answer_question(args.question, args.as_profile, tags, inject=args.inject)
+    print(render(trace))
+    print(f"{DIM}  audit trace written to {trace_path(trace.trace_id)}{RESET}\n")
+    return 0
+
+
+def cmd_show(args: argparse.Namespace) -> int:
+    """Resolve a citation by hand. The ID under an answer is the store's primary key."""
+    from docint.index import get_chunks
+
+    tags = ACCESS_PROFILES.get(args.as_profile)
+    if tags is None:
+        print(f"unknown profile {args.as_profile!r}; known: {', '.join(sorted(ACCESS_PROFILES))}")
+        return 2
+
+    found = get_chunks([args.chunk_id])
+    chunk = found.get(args.chunk_id)
+    if chunk is None:
+        print(f"\n  no chunk {args.chunk_id!r} in the index - ingest first, or check the ID\n")
+        return 1
+
+    # `show` is a read of the same corpus, so it answers to the same access rule.
+    # A citation a principal cannot retrieve is not one they may read out of band.
+    if chunk["access_tag"] not in tags:
+        print(f"\n  {BOLD}access denied{RESET}  {args.as_profile} is not cleared for this document\n")
+        return 3
+
+    conf = (f"ocr {chunk['ocr_confidence']:.1f}" if chunk["ocr_confidence"] >= 0
+            else "born-digital text layer")
+    print(f"\n  {BOLD}{chunk['filename']} - {chunk['location']}{RESET}")
+    print(f"  {DIM}{args.chunk_id}  ·  {chunk['document_type']}  ·  {conf}"
+          f"  ·  access_tag {chunk['access_tag']}{RESET}\n")
+    print("\n".join(f"    {line}" for line in chunk["text"].splitlines()))
+    print()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="docint", description="Document intelligence layer")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -111,6 +157,22 @@ def main(argv: list[str] | None = None) -> int:
     p_ingest.add_argument("--force", action="store_true",
                           help="re-ingest even if the content hash is already in the manifest")
     p_ingest.set_defaults(func=cmd_ingest)
+
+    p_ask = sub.add_parser("ask", help="ask a question of the ingested corpus")
+    p_ask.add_argument("question")
+    p_ask.add_argument("--as", dest="as_profile", default="procurement_analyst",
+                       choices=sorted(ACCESS_PROFILES),
+                       help="the access profile to answer as (stands in for a JWT claim)")
+    p_ask.add_argument("--inject", choices=["none", "once", "always"], default="none",
+                       help="plant an unsupported claim to exercise the verifier: "
+                            "`once` should be stripped and recovered from, `always` refused")
+    p_ask.set_defaults(func=cmd_ask)
+
+    p_show = sub.add_parser("show", help="print the chunk a citation points at")
+    p_show.add_argument("chunk_id")
+    p_show.add_argument("--as", dest="as_profile", default="procurement_analyst",
+                        choices=sorted(ACCESS_PROFILES))
+    p_show.set_defaults(func=cmd_show)
 
     args = parser.parse_args(argv)
     return args.func(args)

@@ -244,6 +244,12 @@ class GenerationRound(BaseModel):
     stripped: list[StrippedClaim] = Field(default_factory=list)
     cost_usd: float = 0.0
 
+    # Set when a claim was PLANTED into this round by fault injection rather than
+    # produced by the model. Recorded on the trace so that a stripped claim in an
+    # eval report can never be mistaken for a hallucination the system happened to
+    # emit: the report states which failures were induced and which were observed.
+    injected_claim: str | None = None
+
 
 QueryStatus = Literal["answered", "refused", "human_review"]
 
