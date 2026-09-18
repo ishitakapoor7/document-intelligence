@@ -1,0 +1,11 @@
+# Externally-authored holdout documents.
+#
+# One line per file:
+#   <filename> | <exact source URL> | retrieved <date> | <license> | expected: <type>
+#
+# Requirements: public domain or a license permitting redistribution; business
+# documents only, no personal data. See eval/generalization_findings.md for why
+# these matter - every other document in this evaluation was authored by the
+# same person who wrote the pipeline.
+#
+# (empty - awaiting documents)

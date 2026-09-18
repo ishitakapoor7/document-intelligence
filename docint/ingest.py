@@ -43,7 +43,8 @@ def save_manifest(manifest: dict[str, ManifestEntry]) -> None:
 
 
 def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
-                    force: bool = False, vision_fallback: bool = True) -> IngestOutcome:
+                    force: bool = False, vision_fallback: bool = True,
+                    index=None) -> IngestOutcome:
     path = Path(path)
     started = time.perf_counter()
 
@@ -81,7 +82,7 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
         document.review_reason = (
             f"classification confidence {document.classification_confidence:.2f} below "
             f"threshold, or no configured type fits; no schema to extract against")
-        return _finish(manifest, document, chunks, started)
+        return _finish(manifest, document, chunks, started, index)
 
     # 5. Quality gate, applied to the EFFECTIVE confidence - i.e. after any fallback.
     effective = document.ocr_mean_confidence
@@ -91,7 +92,7 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
             f"recognition confidence {effective:.1f} is below the {MIN_OCR_CONFIDENCE:.0f} "
             f"threshold" + (" even after vision fallback" if document.ocr.fallback_used else "")
             + "; extraction skipped rather than asserting values read from text we cannot trust.")
-        return _finish(manifest, document, chunks, started)
+        return _finish(manifest, document, chunks, started, index)
 
     # 6. Extract.
     document.fields, document.line_items, document.extraction_cost_usd = extract(document, chunks)
@@ -109,10 +110,17 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
     else:
         document.status = "extracted"
 
-    return _finish(manifest, document, chunks, started)
+    return _finish(manifest, document, chunks, started, index)
 
 
-def _finish(manifest, document: Document, chunks: list[Chunk], started: float) -> IngestOutcome:
+def _finish(manifest, document: Document, chunks: list[Chunk], started: float,
+            index=None) -> IngestOutcome:
+    # Indexed regardless of status: a document routed to review or typed `unknown` is
+    # still findable, it simply carries no asserted field values. Hiding it would mean
+    # a question about it silently returns nothing rather than a flagged answer.
+    if index is not None and chunks:
+        from docint.index import upsert
+        upsert(index, chunks)
     document.total_latency_s = time.perf_counter() - started
     manifest[document.content_hash] = ManifestEntry(
         content_hash=document.content_hash,
@@ -126,14 +134,17 @@ def _finish(manifest, document: Document, chunks: list[Chunk], started: float) -
                          detail=document.review_reason)
 
 
-def ingest_directory(directory: Path, *, force: bool = False,
-                     vision_fallback: bool = True) -> list[tuple[Path, IngestOutcome]]:
+def ingest_directory(directory: Path, *, force: bool = False, vision_fallback: bool = True,
+                     index=None) -> list[tuple[Path, IngestOutcome]]:
     manifest = load_manifest()
+    if index is None:
+        from docint.index import open_index
+        index = open_index()
     results = []
     for path in sorted(Path(directory).rglob("*")):
         if path.is_dir() or path.name.startswith("."):
             continue
         results.append((path, ingest_document(path, manifest, force=force,
-                                              vision_fallback=vision_fallback)))
+                                              vision_fallback=vision_fallback, index=index)))
     save_manifest(manifest)
     return results

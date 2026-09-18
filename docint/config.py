@@ -129,9 +129,11 @@ DOCUMENT_TYPES = tuple(FIELD_SPECS) + ("unknown",)
 # Lexical priors: a cheap deterministic second opinion on classification, and the
 # same map drives optional document-type scoping at query time.
 TYPE_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "invoice":        ("invoice", "bill to", "amount due", "remit", "inv-"),
-    "purchase_order": ("purchase order", "po number", "not-to-exceed", "committed", "po-"),
-    "vendor_record":  ("vendor", "contracted", "master record", "payment terms", "sku"),
+    "invoice":        ("invoice", "bill to", "amount due", "remit", "inv-", "invoiced"),
+    "purchase_order": ("purchase order", "po ", "po-", "po number", "not-to-exceed",
+                       "committed", "commitment", "blanket"),
+    "vendor_record":  ("vendor", "supplier", "contracted", "contract rate", "master record",
+                       "payment terms", "sku", "agreed rate"),
 }
 
 # --------------------------------------------------------------------------- #
