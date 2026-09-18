@@ -48,6 +48,11 @@ MIN_CLASSIFY_CONFIDENCE = 0.60
 # scan and sent through OCR. The demo invoice page has 507; the scanned PO has 0.
 MIN_TEXT_LAYER_CHARS = 100
 
+# Retrieval. top_k is generous because the corpus is small - at three documents this
+# returns most of it, which is why retrieval quality is not yet a variable here.
+RETRIEVAL_TOP_K = 8
+MIN_RETRIEVAL_SCORE = 0.25
+
 OCR_RENDER_DPI = 300
 
 # Below this Tesseract confidence the page is escalated to Claude vision for a second

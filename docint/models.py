@@ -187,3 +187,92 @@ class IngestOutcome(BaseModel):
     @property
     def did_work(self) -> bool:
         return self.status != "unchanged"
+
+
+# --------------------------------------------------------------------------- #
+# Query path
+# --------------------------------------------------------------------------- #
+
+class Claim(BaseModel):
+    """One factual assertion, and the chunks it rests on.
+
+    `cited_chunk_ids` are REAL chunk IDs, not per-query labels. The model is shown
+    the actual IDs and cites them directly, so there is no translation layer between
+    what the model said and what the citation resolves to.
+    """
+
+    text: str
+    cited_chunk_ids: list[str] = Field(min_length=1)
+
+
+class DraftAnswer(BaseModel):
+    answer: str
+    claims: list[Claim] = Field(default_factory=list)
+
+
+class Verdict(BaseModel):
+    """A verifier's judgement on one claim against one cited chunk."""
+
+    supported: bool
+    reason: str
+
+
+class Citation(BaseModel):
+    chunk_id: str
+    filename: str
+    location: str
+    document_type: DocumentType
+    ocr_confidence: float | None = None
+
+    def render(self) -> str:
+        return f"{self.filename} - {self.location}"
+
+
+class StrippedClaim(BaseModel):
+    text: str
+    cited_chunk_ids: list[str]
+    reason: str
+
+
+class GenerationRound(BaseModel):
+    """One pass of generate -> verify -> strip. Two of these at most."""
+
+    round_index: int
+    claims: list[Claim] = Field(default_factory=list)
+    invalid_citations: list[str] = Field(default_factory=list)
+    verdicts: list[tuple[str, Verdict]] = Field(default_factory=list)
+    stripped: list[StrippedClaim] = Field(default_factory=list)
+    cost_usd: float = 0.0
+
+
+QueryStatus = Literal["answered", "refused", "human_review"]
+
+
+class QueryTrace(BaseModel):
+    """One JSON file per query - the only output format.
+
+    `ask` renders it, `eval` scores a list of them, `show` resolves citations out of
+    it. One model, three consumers: there is no second description of what happened
+    that could disagree with this one.
+    """
+
+    trace_id: str
+    question: str
+    principal: str
+    access_tags: list[str]
+    type_filter: list[str] = Field(default_factory=list)
+
+    retrieved_chunk_ids: list[str] = Field(default_factory=list)
+    retrieved_documents: list[str] = Field(default_factory=list)
+    rounds: list[GenerationRound] = Field(default_factory=list)
+    regeneration_count: int = 0
+
+    final_status: QueryStatus = "refused"
+    final_answer: str | None = None
+    kept_claims: list[Claim] = Field(default_factory=list)
+    final_citations: list[Citation] = Field(default_factory=list)
+    refusal_reason: str | None = None
+    review_reason: str | None = None
+
+    total_cost_usd: float = 0.0
+    total_latency_s: float = 0.0
