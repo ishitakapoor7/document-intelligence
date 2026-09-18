@@ -181,6 +181,17 @@ def answer_question(question: str, principal: str, access_tags: frozenset[str],
         trace.rounds.append(rnd)
         trace.total_cost_usd += rnd.cost_usd
 
+        # An answer with no verified claims is a refusal, whatever prose came with it.
+        # Checking only "was anything stripped" reported `answered` when the model
+        # correctly returned zero claims and explained it could not answer - which
+        # would have silently inflated the answered rate in the eval.
+        if not kept:
+            trace.final_status = "refused"
+            trace.refusal_reason = (draft.answer or
+                                    "the accessible documents do not support an answer")
+            trace.final_answer = None
+            break
+
         if not rnd.stripped:
             trace.final_status = "answered"
             trace.final_answer = draft.answer
