@@ -1,141 +1,168 @@
-# Generalization findings
+# Evaluation findings
 
-Run: `python eval/run_ingest_eval.py` (full output in `eval/ingest_eval_output.txt`).
+`python eval/run_ingest_eval.py` — full output in `eval/ingest_eval_output.txt`.
 
-Two corpora, scored identically against hand-authored ground truth. No model grades
-anything here - every judgement is a comparison against `gold.yaml` /
-`generalization_gold.yaml`.
+Two corpora, scored identically against hand-authored ground truth. Nothing here is
+model-graded: every judgement is a comparison against `gold.yaml` /
+`generalization_gold.yaml`. The one model-reported number in the report — vision
+legibility — is labelled wherever it appears and never averaged with measured figures.
 
-| | classification | field extraction | hallucinations | schema mismatches |
-|---|---|---|---|---|
-| **Controlled fixtures** (written alongside `FIELD_SPECS`) | 3/3 | 17/17 | 0 | 0 |
-| **Generalization set** (written independently, schemas unchanged) | **7/8** | **23/25** | **0** | 4 |
+| | classification | scalar fields | line items | **document completeness** | hallucinations |
+|---|---|---|---|---|---|
+| **Controlled fixtures** | 3/3 | 15/15 | 4/4 | **3/3** | 0 |
+| **Synthetic adversarial set** | 8/8 | 22/23 | 15/15 | **7/8** | 0 |
 
-The generalization set was authored without reference to `docint/config.py`, and the
-configured schemas were **not** adjusted afterwards to fit it. `scripts/build_generalization_set.py`
-does not import `docint`.
+**On the naming.** What was previously called the "generalization set" is now the
+**synthetic adversarial set**. It was written without reference to `docint/config.py` and
+the schemas were not adjusted to fit it — but it was authored by the same person who wrote
+the pipeline, and the difficulties in it were chosen by someone who knew where the system
+was weak. That is adversarial, not general. No externally-authored document has been
+tested yet.
 
----
-
-## What held up
-
-**Alternate labels are not a problem.** G1 uses "Our Ref" for the invoice number, "Bill
-Date" for the date, "Your Order" for the PO reference and "Amount Payable" for the total.
-All four mapped correctly. G3 never uses the phrase "purchase order" at all - it is a
-BLANKET PURCHASE AGREEMENT with a "Maximum Commitment" instead of a total - and still
-classified and extracted 5/5. This is the clearest evidence that extraction is reading the
-documents rather than pattern-matching the generator: there is no template, no coordinate
-map and no per-field regex anywhere in the pipeline.
-
-**Long-form dates normalise.** "11 April 2026" -> `2026-04-11`.
-
-**Multi-page works.** G1's line-item table continues overleaf and the totals block sits on
-page 2; the total was extracted correctly.
-
-**No hallucination on the absent-field test.** G2 carries no purchase-order reference of
-any kind. `po_reference` came back `None`. This is the single most important positive
-result in the run: extracting a plausible-looking PO number there would have been worse
-than missing it, because a wrong value is indistinguishable from a right one downstream.
-
-**Handwriting was not mistaken for authority.** G4 has a handwritten amendment striking
-through the printed order value and writing `19,400.00` above it. The system did not report
-19,400.00. It reported nothing - which is the safe failure.
-
-**Cross-row consistency held.** G7 is a three-supplier sheet where the single-vendor schema
-is underdetermined. All five extracted fields came from the same row (one chunk). Mixing
-attributes across suppliers would have been the serious failure, and it did not happen.
+**On "22/23".** This counts **schema-representable scalar fields** only — single-valued
+fields the configured schema can hold. It is not document accuracy. Repeating data is
+scored separately as line items, and documents the schema cannot represent at all are
+scored as mismatches rather than quietly passing. **Document completeness** — documents
+with nothing wrong, nothing missing and nothing unrepresentable — is the number to read.
 
 ---
 
-## Failure 1 - a receipt was confidently classified as an invoice
+## The recognition ladder now works, and it is worth what it costs
 
-```
-G5_receipt_office_supply.pdf   got=invoice  expected=unknown  confidence=0.95
-```
+Paired runs, same bytes, same thresholds, the only difference being whether the vision
+escalation was allowed to fire:
 
-**The most significant finding in this run.** A retail receipt is invoice-adjacent - vendor,
-date, line items, total - but it is not one of the three configured types. In an accounts
-payable context the distinction is material: an invoice is a request for payment, a receipt
-is evidence of a completed one. Classifying the latter as the former queues a paid
-transaction for payment.
+| document | tesseract | fallback off | fallback on | post | cost | latency |
+|---|---|---|---|---|---|---|
+| L1 clean | 95.1 | extracted | extracted (not triggered) | – | $0.025 | 6.6s |
+| L2 medium | 62.4 | extracted | extracted | 94.0 | $0.062 | 12.5s |
+| **L3 degraded** | 43.4 | **needs_review_ocr** | **extracted** | 88.0 | $0.062 | 13.6s |
+| G2 stamped scan | 89.1 | extracted | extracted (not triggered) | – | $0.026 | 7.8s |
+| **G4 amended scan** | 55.1 | **needs_review_missing_fields** | **extracted** | 88.0 | $0.062 | 13.6s |
+| G6 thermal receipt | 33.3 | unknown_type | unknown_type | 78.0 | $0.021 | 7.7s |
 
-**Why the existing guard did not catch it.** The `unknown` route triggers on *low*
-confidence. This misclassification arrived at **0.95**. The design assumed
-miscategorisation surfaces as uncertainty; here the model was confidently wrong, and a
-confidence threshold cannot catch that. The lexical prior did not help either - a receipt
-genuinely contains invoice-ish vocabulary.
+Two documents move from a review queue to fully extracted for about **4 cents and 8
+seconds each**. The escalation fires only below 75 Tesseract confidence, so clean
+documents pay nothing.
 
-This is the classification analogue of the confidently-wrong-OCR case recorded in
-`ocr_ladder.md`, and it did reproduce. A confidence gate is not a correctness gate.
+**`post` is not comparable to `tesseract`.** Tesseract reports a per-word score from its
+own classifier — a measurement. A vision model has no equivalent, so that column is the
+model's self-reported legibility: model-graded, uncalibrated, and useful as a gate ("did
+the second read go better?") rather than as a number.
 
-**Two candidate responses, neither applied yet:**
-
-1. *Add `receipt` to the taxonomy.* This is the PRD's stated extension path - a taxonomy
-   entry plus a field list, no pipeline code - and it would double as a demonstration that
-   the extension point is real. It does not fix the general problem: the next unmodelled
-   near-miss type fails the same way.
-2. *Sharpen the type definitions in the classification prompt* so `invoice` explicitly
-   excludes proof-of-payment documents. Cheaper, and addresses the specific confusion
-   rather than the class of it.
-
-Neither is applied, because either would be tuning against a test already run. Recorded as
-a known failure instead.
-
-## Failure 2 - two fields missing on a degraded, annotated scan
-
-```
-G4_po_amended_scan.pdf   ocr=55.1   vendor_name=None   committed_amount=None
-```
-
-Both are **misses, not errors** - no wrong value was asserted. The amount is the field the
-handwritten amendment sits on top of, and the vendor name is in the most degraded region of
-the header.
-
-Worth flagging: **55.1 is barely above `MIN_OCR_CONFIDENCE = 55.0`.** This document sits
-0.1 points clear of the review gate, so it was extracted from rather than escalated - and
-then silently returned nothing for two of five fields. A document that scrapes past the
-threshold and yields partial data is arguably a worse outcome than one that fails it
-cleanly, and this is the first evidence that a single mean-confidence gate is too blunt.
-A per-field confidence check, or a "too many fields missing" rule, would catch it. Not
-built; recorded.
-
-## Failure 3 (not an error) - the schema does not fit multi-line documents
-
-Four `schema_mismatch` entries, all the same shape. `FIELD_SPECS` gives an invoice one
-`quantity` and one `unit_price`. G1 has six line items, G2 has three.
-
-The pipeline does not error here - it silently returns the **first** line's values:
-
-```
-G1   quantity 120.0   unit_price 18.40     (line 1 of 6)
-G2   quantity 12.0    unit_price None      (line 1 of 3)
-```
-
-Nothing marks these as partial. A downstream consumer reading `quantity=120` for G1 would
-be wrong about a $4,865 invoice. The behaviour is also inconsistent - G2 returned a quantity
-but not a unit price from the same document.
-
-This is a **schema design limitation, not an extraction bug**, and it is exactly the kind of
-thing that only surfaces against documents you did not write. The controlled fixtures each
-have a single line item, so the mismatch was structurally invisible there. The fix is a
-line-items array in the schema; the reason it is recorded rather than done is that changing
-the schema in response to these documents is the thing this exercise exists to avoid.
+**A consequence worth stating:** with the fallback on, nothing in this corpus now reaches
+`needs_review_ocr`. The review floor is only touched when vision *also* fails, and no
+document here defeats it. The floor is therefore untested, which is a gap, not a success.
 
 ---
 
-## What this does and does not establish
+## Failure — extraction applied an uncountersigned handwritten amendment
 
-**Does:** the pipeline maps genuinely varied layouts and vocabulary onto fixed schemas;
-it declines to invent absent values; it does not treat handwriting as authoritative; it
-keeps multi-record extraction internally consistent.
+```
+G4_po_amended_scan.pdf   committed_amount = 19400.00   expected 18750.00
+```
 
-**Does not:** these documents are still synthetic and still written by the same author as
-the pipeline. Alternate labels and layouts were chosen by someone who knew what the system
-would find difficult, which is not the same as documents chosen by the world. Real scans
-carry artefacts absent here - skew from a sheet feeder, shadow gradients, staple holes,
-photocopier banding, multi-column layouts, rotated pages, mixed languages. The honest claim
-is that the system is not merely recovering schemas from documents generated out of those
-schemas; it is not that it is production-ready on real enterprise documents.
+**This is the most important result in the run, and it inverts an earlier claim.**
 
-**The gap that matters most** remains a document where recognition is confident and wrong -
-see `ocr_ladder.md`. Failure 1 shows the classification analogue of that gap is real.
+A previous version of this document stated that "handwriting was not mistaken for
+authority". That was wrong, and the correction matters: with the fallback off, the
+handwritten figure was simply *unreadable to Tesseract*. Absence of a wrong answer was
+read as evidence of correct judgement. It was not.
+
+With vision recognition, the handwriting becomes legible — and the failure appears.
+
+**The failure is not in recognition.** The vision transcription is exactly right:
+
+```
+[HANDWRITTEN] 19,400.00  DO 6/3
+Order Value:                                      EUR 18,750.00
+[Note: printed "EUR 18,750.00" is struck through by hand]
+```
+
+It marked the handwriting, preserved the printed value, and even noted the strikethrough.
+**The failure is in extraction**, one stage later: given both values and a visible
+strikethrough, it decided the amendment superseded the printed figure and returned
+19,400.00. The document itself says *"Amendments must be countersigned"*, and this one is
+unsigned.
+
+So this is a **reasoning error, not a reading error**, and the ladder localises it
+precisely. It is also the confidently-wrong case previously recorded as missing from this
+evaluation — it did reproduce, by a route not anticipated: **improving recognition created
+it.** A system that cannot read handwriting cannot misapply it.
+
+**Not fixed.** The fix is a policy statement in the extraction prompt — extract printed
+values; never apply a handwritten amendment as authoritative — and it is genuinely missing
+behaviour rather than a tuning knob. It is left undone because adding it now, against a
+test already run, would forfeit the evidence. It should be added and then validated on a
+document not used to discover it.
+
+---
+
+## What the receipt fix changed, and what it does not prove
+
+Classification went 7/8 → **8/8**. The retail receipt that was previously labelled
+`invoice` at 0.95 confidence is now correctly `unknown`.
+
+The fix was not a threshold. A confidence gate cannot catch a model that is confidently
+wrong. The taxonomy previously listed four labels without saying what distinguished them,
+and `invoice` is a reasonable answer for anything with a vendor, a date and a total. It now
+carries definitions — *an invoice requests payment still owed; a receipt evidences payment
+already made* — and names the near-misses explicitly (receipts, delivery notes, packing
+slips, quotations, statements, remittance advice, credit notes).
+
+`receipt` was deliberately **not** added to the taxonomy. The system should be able to say
+"not one of mine" about a document type it does not model.
+
+**This does not yet prove the fix generalises.** It was validated on the document that
+exposed it. A fresh holdout is required.
+
+---
+
+## Multi-record schema mismatch (G7)
+
+A three-supplier workbook against a single-vendor schema. The pipeline returns **nothing**
+and routes to `needs_review_missing_fields` with the classification preserved.
+
+An earlier version of the gold file accepted "any one of the three suppliers" as a pass.
+That was wrong, and it has been corrected: returning one arbitrary row from a three-row
+sheet is fabrication — a consumer would believe the workbook describes a single supplier at
+$124.00/unit. Declining is the correct outcome, and the stricter extraction instruction
+("do not infer, derive or invent a value that is not printed") is what produced it.
+
+The underlying limitation stands: a repeating-vendor schema, the same shape as
+`line_items[]`, is the fix. Not built.
+
+---
+
+## line_items[] closed a silent data-loss bug
+
+`quantity` and `unit_price` were scalar invoice fields. On a six-line invoice the pipeline
+returned line 1 of 6, with nothing marking it partial — `quantity=120` on a $4,865 invoice.
+This was **structurally invisible** on the controlled fixtures, where every document has
+exactly one line item.
+
+Repeating data now lives in `line_items[]`; scalars describe the document, not its rows.
+15/15 line items extracted across the adversarial set, including the six-line invoice whose
+table continues onto a second page.
+
+---
+
+## What this establishes, and what it does not
+
+**Establishes:** varied layouts and vocabulary map onto fixed schemas (G3 never uses the
+words "purchase order" and still scores 5/5; G1's "Our Ref"/"Bill Date"/"Your Order"/"Amount
+Payable" all map); absent fields are not invented (G2 carries no PO reference and
+`po_reference` is null); multi-record ambiguity is declined rather than guessed; recognition
+escalation converts two review items into extractions for cents.
+
+**Does not establish:** every document here is synthetic and authored by the pipeline's
+author. Real scans carry artefacts absent from all of them — sheet-feeder skew, shadow
+gradients, staple holes, photocopier banding, multi-column layouts, mixed languages. The
+receipt classification fix is validated only on the document that exposed it. The
+`needs_review_ocr` floor is untested now that vision recovers everything in the corpus.
+
+**Open gaps, in priority order:**
+1. Externally-authored holdout documents. Nothing here was written by anyone but me.
+2. The G4 amendment policy — specified, not implemented, deliberately.
+3. A document that defeats vision, to test the review floor.
+4. A repeating-vendor schema for multi-record workbooks.

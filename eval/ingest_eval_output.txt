@@ -4,28 +4,30 @@ CONTROLLED FIXTURES (written alongside the schemas)
 ==============================================================================
 
 invoice_acme_001.pdf
-  type       OK  got=invoice          expected=invoice          conf=0.99
-  ocr        digital  file_type=pdf_digital  status=ingested
+  type       OK  got=invoice          expected=invoice          conf=0.98
+  ocr        digital  file_type=pdf_digital  status=extracted
     OK  invoice_number           INV-2026-0117                  expected='INV-2026-0117'
     OK  vendor_name              Acme Industrial Supply Co.     expected='Acme Industrial Supply Co.'
     OK  invoice_date             2026-03-14                     expected='2026-03-14'
     OK  po_reference             PO-2026-0043                   expected='PO-2026-0043'
-    OK  quantity                 80.0                           expected=80
-    OK  unit_price               156.0                          expected=156.0
     OK  total_amount             12480.0                        expected=12480.0
+  OK  line_items  1 extracted, 1 expected
+      OK   hydraulic coupling qty=80.0 unit=156.0 amt=12480.0
 
 po_acme_001.pdf
-  type       OK  got=purchase_order   expected=purchase_order   conf=0.99
-  ocr        95.1     file_type=pdf_scanned  status=ingested
+  type       OK  got=purchase_order   expected=purchase_order   conf=0.98
+  ocr        95.1     file_type=pdf_scanned  status=extracted
     OK  po_number                PO-2026-0043                   expected='PO-2026-0043'
     OK  vendor_name              Acme Industrial Supply Co.     expected='Acme Industrial Supply Co.'
     OK  issue_date               2026-02-28                     expected='2026-02-28'
     OK  buyer_entity             Northwind Manufacturing LLC    expected='Northwind Manufacturing LLC'
     OK  committed_amount         12000.0                        expected=12000.0
+  OK  line_items  1 extracted, 1 expected
+      OK   hydraulic coupling qty=80.0 unit=None amt=12000.0
 
 vendor_records.xlsx
-  type       OK  got=vendor_record    expected=vendor_record    conf=0.95
-  ocr        digital  file_type=xlsx         status=ingested
+  type       OK  got=vendor_record    expected=vendor_record    conf=0.98
+  ocr        digital  file_type=xlsx         status=extracted
     OK  vendor_id                V-1042                         expected='V-1042'
     OK  vendor_name              Acme Industrial Supply Co.     expected='Acme Industrial Supply Co.'
     OK  contracted_unit_price    150.0                          expected=150.0
@@ -33,85 +35,124 @@ vendor_records.xlsx
     OK  payment_terms            Net 30                         expected='Net 30'
 
 ==============================================================================
-GENERALIZATION SET (written independently of the schemas)
+SYNTHETIC ADVERSARIAL SET (written independently of the schemas, same author)
 ==============================================================================
 
 G1_invoice_northstar_multipage.pdf
-  type       OK  got=invoice          expected=invoice          conf=0.99
-  ocr        digital  file_type=pdf_digital  status=ingested
+  type       OK  got=invoice          expected=invoice          conf=0.98
+  ocr        digital  file_type=pdf_digital  status=extracted
     OK  invoice_number           NF/24518                       expected='NF/24518'
     OK  vendor_name              Northstar Fabrication Ltd.     expected='Northstar Fabrication Ltd.'
     OK  invoice_date             2026-04-11                     expected='2026-04-11'
     OK  po_reference             PO-2026-0091                   expected='PO-2026-0091'
-    ~   quantity                 120.0                          SCHEMA MISMATCH: six line items; the schema assumes one
-    ~   unit_price               18.4                           SCHEMA MISMATCH: six distinct rates; the schema assumes one
     OK  total_amount             4865.45                        expected=4865.45
+  OK  line_items  6 extracted, 6 expected
+      OK   bracket        qty=120.0 unit=18.4 amt=2208.0
+      OK   dowel          qty=500.0 unit=1.15 amt=575.0
+      OK   weld nut       qty=800.0 unit=0.62 amt=496.0
+      OK   gland          qty=250.0 unit=2.05 amt=512.5
+      OK   hex bolt       qty=300.0 unit=0.94 amt=282.0
+      OK   carriage       qty=1.0 unit=85.0 amt=85.0
 
 G2_invoice_stamped_scan.pdf
-  type       OK  got=invoice          expected=invoice          conf=0.99
-  ocr        89.1     file_type=pdf_scanned  status=ingested
+  type       OK  got=invoice          expected=invoice          conf=0.98
+  ocr        89.1     file_type=pdf_scanned  status=extracted
     OK  invoice_number           BES-77310                      expected='BES-77310'
     OK  vendor_name              BAYSIDE ELECTRICAL SUPPLY      expected='Bayside Electrical Supply'
     OK  invoice_date             2026-03-22                     expected='2026-03-22'
     OK  po_reference             None                           correctly absent
-    ~   quantity                 12.0                           SCHEMA MISMATCH: three line items
-    ~   unit_price               None                           SCHEMA MISMATCH: three line items
     OK  total_amount             4942.0                         expected=4942.0
+  OK  line_items  3 extracted, 3 expected
+      OK   thhn           qty=12.0 unit=None amt=1428.0
+      OK   panelboard     qty=4.0 unit=None amt=3196.0
+      OK   emt            qty=40.0 unit=None amt=318.0
 
 G3_blanket_purchase_agreement.pdf
   type       OK  got=purchase_order   expected=purchase_order   conf=0.95
-  ocr        digital  file_type=pdf_digital  status=ingested
+  ocr        digital  file_type=pdf_digital  status=extracted
     OK  po_number                BPA-4471-26                    expected='BPA-4471-26'
     OK  vendor_name              Vertex Aerospace Components Inc. expected='Vertex Aerospace Components Inc.'
     OK  issue_date               2026-01-15                     expected='2026-01-15'
     OK  buyer_entity             Northwind Manufacturing LLC    expected='Northwind Manufacturing LLC'
     OK  committed_amount         200150.0                       expected=200150.0
+  OK  line_items  3 extracted, 3 expected
+      OK   fastener       qty=2000.0 unit=68.0 amt=136000.0
+      OK   collar         qty=1500.0 unit=22.5 amt=33750.0
+      OK   inspection     qty=40.0 unit=760.0 amt=30400.0
 
 G4_po_amended_scan.pdf
   type       OK  got=purchase_order   expected=purchase_order   conf=0.95
-  ocr        55.1     file_type=pdf_scanned  status=ingested
+  ocr        88.0     file_type=pdf_scanned  status=extracted
     OK  po_number                HC-2026-8802                   expected='HC-2026-8802'
-    MISS vendor_name              None                           expected='Harlow Components GmbH'
+    OK  vendor_name              Harlow Components GmbH         expected='Harlow Components GmbH'
     OK  issue_date               2026-03-05                     expected='2026-03-05'
     OK  buyer_entity             Northwind Manufacturing LLC    expected='Northwind Manufacturing LLC'
-    MISS committed_amount         None                           expected=18750.0
+    FAIL committed_amount         19400.0                        expected=18750.0
 
 G5_receipt_office_supply.pdf
-  type       FAIL got=invoice          expected=unknown          conf=0.95
-  ocr        digital  file_type=pdf_digital  status=ingested
+  type       OK  got=unknown          expected=unknown          conf=0.95
+  ocr        digital  file_type=pdf_digital  status=unknown_type
 
 G6_receipt_thermal_scan.pdf
-  type       OK  got=unknown          expected=unknown          conf=0.85
-  ocr        33.3     file_type=pdf_scanned  status=unknown_type
+  type       OK  got=unknown          expected=unknown          conf=0.95
+  ocr        78.0     file_type=pdf_scanned  status=unknown_type
 
 G7_supplier_terms_horizontal.xlsx
-  type       OK  got=vendor_record    expected=vendor_record    conf=0.92
-  ocr        digital  file_type=xlsx         status=ingested
-    OK  vendor_id                SUP-0098                       (any of ['SUP-0098', 'SUP-0101', 'SUP-0112'])
-    OK  vendor_name              Harlow Components GmbH         (any of ['Harlow Components GmbH', 'Vertex Aerospace Components', 'Northstar Fabrication Ltd.'])
-    OK  contracted_unit_price    124.0                          (any of [124.0, 68.0, 18.4])
-    OK  contract_effective_date  2026-02-01                     (any of ['2026-02-01', '2026-01-15', '2026-03-01'])
-    OK  payment_terms            45 days                        (any of ['45 days', 'Net 60', '30 days'])
-  OK  all fields from one chunk (1 distinct chunk(s) cited)
+  type       OK  got=vendor_record    expected=vendor_record    conf=0.95
+  ocr        digital  file_type=xlsx         status=needs_review_missing_fields
+    OK  vendor_id                None                           correctly absent
+    OK  vendor_name              None                           correctly absent
+    OK  contracted_unit_price    None                           correctly absent
 
 G8_safety_data_sheet.pdf
-  type       OK  got=unknown          expected=unknown          conf=0.95
+  type       OK  got=unknown          expected=unknown          conf=0.98
   ocr        digital  file_type=pdf_digital  status=unknown_type
 
 ------------------------------------------------------------------------------
 CONTROLLED SUMMARY
-  classification     3/3
-  field extraction   17/17  (excludes schema mismatches)
-  hallucinations     0   <-- values invented where the document has none
+  classification                3/3
+  schema-representable scalars  15/15
+     ^ this is NOT document accuracy. It counts only single-valued fields the
+       configured schema can hold; repeating and multi-record data is below.
+  line items                    4/4
+  DOCUMENT COMPLETENESS         3/3  (documents with nothing wrong, missing or unrepresentable)
+  hallucinations                0
 
 ------------------------------------------------------------------------------
-GENERALIZATION SUMMARY
-  classification     7/8
-  field extraction   23/25  (excludes schema mismatches)
-  hallucinations     0   <-- values invented where the document has none
-  schema mismatches  4   (document well-formed, configured schema does not fit)
+SYNTHETIC ADVERSARIAL SUMMARY
+  classification                8/8
+  schema-representable scalars  22/23
+     ^ this is NOT document accuracy. It counts only single-valued fields the
+       configured schema can hold; repeating and multi-record data is below.
+  line items                    15/15
+  DOCUMENT COMPLETENESS         7/8  (documents with nothing wrong, missing or unrepresentable)
+  hallucinations                0
 
-  FAILURES (3):
-    [miss         ] G4_po_amended_scan.pdf :: vendor_name  got None, expected 'Harlow Components GmbH'
-    [miss         ] G4_po_amended_scan.pdf :: committed_amount  got None, expected 18750.0
-    [fail         ] G5_receipt_office_supply.pdf :: __type__  got invoice, expected unknown
+  FAILURES (1):
+    [fail         ] G4_po_amended_scan.pdf :: committed_amount  got 19400.0, expected 18750.0
+
+====================================================================================================================
+DEGRADED-CASE LADDER
+====================================================================================================================
+document                        fb?  class             tess   post                      decision           missing     cost   lat
+---------------------------------------------------------------------------------------------------------------------------------
+po_acme_001_L1_clean.pdf        no   purchase_order    95.1      -                     extracted                 -   0.0249   6.5
+                                yes  purchase_order    95.1      -                     extracted                 -   0.0249   6.7
+
+po_acme_001_L2_medium.pdf       no   purchase_order    62.4      -                     extracted                 -   0.0256   7.4
+                                yes  purchase_order    62.4   94.0                     extracted                 -   0.0616  12.5
+
+po_acme_001_L3_degraded.pdf     no   purchase_order    43.4      -              needs_review_ocr                 -   0.0000   1.8
+                                yes  purchase_order    43.4   88.0                     extracted                 -   0.0622  13.6
+
+G2_invoice_stamped_scan.pdf     no   invoice           89.1      -                     extracted                 -   0.0261   7.8
+                                yes  invoice           89.1      -                     extracted                 -   0.0255   7.5
+
+G4_po_amended_scan.pdf          no   purchase_order    55.1      -   needs_review_missing_fieldsvendor_name,committed_amount   0.0216   6.6
+                                yes  purchase_order    55.1   88.0                     extracted                 -   0.0619  13.6
+
+G6_receipt_thermal_scan.pdf     no   unknown           33.3      -                  unknown_type                 -   0.0000   1.5
+                                yes  unknown           33.3   78.0                  unknown_type                 -   0.0206   7.7
+
+  `post` is the vision model's SELF-REPORTED legibility - model-graded, and NOT
+  comparable to the Tesseract column, which is a measured classifier score.

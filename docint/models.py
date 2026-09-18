@@ -82,24 +82,82 @@ class ExtractedField(BaseModel):
         return self.ocr_confidence is not None and self.ocr_confidence < LOW_CONFIDENCE_FIELD
 
 
+class LineItem(BaseModel):
+    """One row of a repeating table. Scalars describe a document; these describe rows."""
+
+    description: str | None = None
+    quantity: float | None = None
+    unit_price: float | None = None
+    amount: float | None = None
+    chunk_id: str | None = None
+
+
+DocumentStatus = Literal[
+    "extracted",                    # typed, and every required field present
+    "needs_review_missing_fields",  # typed, but a required field could not be read
+    "needs_review_ocr",             # recognition too poor to extract from at all
+    "unknown_type",                 # no confident label, so no schema to extract against
+    "unsupported_format",
+    "unchanged",                    # content hash already in the manifest
+]
+
+
+class OcrTelemetry(BaseModel):
+    """What the recognition stage did, and what it cost.
+
+    `post_fallback_confidence` is NOT comparable to `tesseract_confidence`. Tesseract
+    reports a per-word confidence derived from its own classifier. A vision model has
+    no such signal, so the number here is the model's SELF-REPORTED legibility - a
+    model-graded figure, labelled as such wherever it is displayed, and never mixed
+    into a measured average.
+    """
+
+    tesseract_confidence: float | None = None
+    fallback_used: bool = False
+    fallback_route: Literal["claude"] | None = None
+    post_fallback_confidence: float | None = None   # model-reported, not measured
+    fallback_cost_usd: float = 0.0
+    fallback_latency_s: float = 0.0
+
+
 class Document(BaseModel):
     """One ingested file."""
 
     document_id: str                       # doc_<first 12 of content_hash>
     filename: str
     file_type: FileType
-    content_hash: str                      # sha256 of the raw bytes
+    content_hash: str
     access_tag: str
     page_count: int = 0
 
     document_type: DocumentType = "unknown"
     classification_confidence: float = 0.0
     fields: list[ExtractedField] = Field(default_factory=list)
+    line_items: list[LineItem] = Field(default_factory=list)
 
-    ocr_mean_confidence: float | None = None   # None for born-digital
-    ocr_route: Literal["tesseract", "claude"] | None = None
-    needs_review: bool = False
+    status: DocumentStatus = "extracted"
+    missing_required_fields: list[str] = Field(default_factory=list)
     review_reason: str | None = None
+
+    ocr: OcrTelemetry = Field(default_factory=OcrTelemetry)
+    extraction_cost_usd: float = 0.0
+    total_latency_s: float = 0.0
+
+    @property
+    def needs_review(self) -> bool:
+        return self.status.startswith("needs_review")
+
+    @property
+    def ocr_mean_confidence(self) -> float | None:
+        """Effective confidence: the fallback's figure when one was used.
+
+        Deliberately a property rather than a stored field, so there is exactly one
+        answer to 'how well was this document read' and it cannot drift from the
+        telemetry it derives from.
+        """
+        if self.ocr.fallback_used and self.ocr.post_fallback_confidence is not None:
+            return self.ocr.post_fallback_confidence
+        return self.ocr.tesseract_confidence
 
 
 class ManifestEntry(BaseModel):
@@ -118,9 +176,10 @@ class ManifestEntry(BaseModel):
 
 
 class IngestOutcome(BaseModel):
-    """What happened to one file. `unchanged` is what makes idempotence visible."""
+    """What happened to one file. Status mirrors DocumentStatus so there is one
+    vocabulary for 'what happened', not two that can disagree."""
 
-    status: Literal["ingested", "unchanged", "needs_review", "unknown_type", "unsupported"]
+    status: DocumentStatus
     document: Document | None = None
     chunks: list[Chunk] = Field(default_factory=list)
     detail: str | None = None

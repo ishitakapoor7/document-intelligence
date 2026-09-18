@@ -50,11 +50,30 @@ MIN_TEXT_LAYER_CHARS = 100
 
 OCR_RENDER_DPI = 300
 
+# Below this Tesseract confidence the page is escalated to Claude vision for a second
+# transcription. Set at the field-flag threshold: if values would be surfaced as
+# untrusted anyway, a better read is worth one call.
+MIN_OCR_FOR_VISION_FALLBACK = 75.0
+MODEL_VISION = "claude-opus-5"
+
+# USD per million tokens, for the cost column in the degraded-case table.
+PRICING = {
+    "claude-opus-5":  {"input": 5.00, "output": 25.00},
+    "claude-haiku-4-5": {"input": 1.00, "output": 5.00},
+}
+
+
+def usd_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    p = PRICING.get(model)
+    if not p:
+        return 0.0
+    return (input_tokens * p["input"] + output_tokens * p["output"]) / 1_000_000
+
 # --------------------------------------------------------------------------- #
 # Extraction schemas - plain data, so adding a document type is a config change
 # --------------------------------------------------------------------------- #
 
-FieldKind = Literal["identifier", "string", "date", "currency", "number"]
+FieldKind = Literal["identifier", "string", "date", "currency", "number", "line_items"]
 
 
 @dataclass(frozen=True)
@@ -62,33 +81,48 @@ class FieldSpec:
     name: str
     kind: FieldKind
     description: str
+    required: bool = False   # absent required field -> human review, type preserved
 
 
+# `quantity` and `unit_price` are deliberately NOT scalar invoice fields. They were,
+# and on a six-line invoice the pipeline silently returned line 1 of 6 with nothing
+# marking it partial - a schema limitation invisible on single-line fixtures. Repeating
+# data now lives in line_items[]; scalars describe the document, not its rows.
 FIELD_SPECS: dict[str, tuple[FieldSpec, ...]] = {
     "invoice": (
-        FieldSpec("invoice_number", "identifier", "the invoice's own number, e.g. INV-2026-0117"),
-        FieldSpec("vendor_name",    "string",     "the company that issued the invoice"),
-        FieldSpec("invoice_date",   "date",       "date of issue, ISO YYYY-MM-DD"),
-        FieldSpec("po_reference",   "identifier", "purchase order this invoice bills against"),
-        FieldSpec("quantity",       "number",     "units billed on the line item"),
-        FieldSpec("unit_price",     "currency",   "price per unit actually billed"),
-        FieldSpec("total_amount",   "currency",   "total amount due"),
+        FieldSpec("invoice_number", "identifier", "the invoice's own number, e.g. INV-2026-0117", required=True),
+        FieldSpec("vendor_name",    "string",     "the company that issued the invoice", required=True),
+        FieldSpec("invoice_date",   "date",       "date of issue, ISO YYYY-MM-DD", required=True),
+        # optional: many legitimate invoices carry no PO reference at all
+        FieldSpec("po_reference",   "identifier", "purchase order this invoice bills against, if any"),
+        FieldSpec("total_amount",   "currency",   "total amount due", required=True),
+        FieldSpec("line_items",     "line_items", "every billed line on the invoice"),
     ),
     "purchase_order": (
-        FieldSpec("po_number",        "identifier", "the PO's own number, e.g. PO-2026-0043"),
-        FieldSpec("vendor_name",      "string",     "the supplier the PO is issued to"),
-        FieldSpec("issue_date",       "date",       "date the PO was issued, ISO YYYY-MM-DD"),
+        FieldSpec("po_number",        "identifier", "the PO's own number, e.g. PO-2026-0043", required=True),
+        FieldSpec("vendor_name",      "string",     "the supplier the PO is issued to", required=True),
+        FieldSpec("issue_date",       "date",       "date the PO was issued, ISO YYYY-MM-DD", required=True),
         FieldSpec("buyer_entity",     "string",     "the organisation issuing the PO"),
-        FieldSpec("committed_amount", "currency",   "total amount committed / not-to-exceed"),
+        FieldSpec("committed_amount", "currency",   "total committed / not-to-exceed / maximum commitment", required=True),
+        FieldSpec("line_items",       "line_items", "every ordered line on the purchase order"),
     ),
     "vendor_record": (
-        FieldSpec("vendor_id",               "identifier", "internal vendor ID, e.g. V-1042"),
-        FieldSpec("vendor_name",             "string",     "the vendor's company name"),
-        FieldSpec("contracted_unit_price",   "currency",   "agreed contract price per unit"),
+        FieldSpec("vendor_id",               "identifier", "internal vendor ID, e.g. V-1042", required=True),
+        FieldSpec("vendor_name",             "string",     "the vendor's company name", required=True),
+        FieldSpec("contracted_unit_price",   "currency",   "agreed contract price per unit", required=True),
         FieldSpec("contract_effective_date", "date",       "contract start date, ISO YYYY-MM-DD"),
         FieldSpec("payment_terms",           "string",     "e.g. Net 30"),
     ),
 }
+
+
+def required_fields(document_type: str) -> tuple[str, ...]:
+    return tuple(f.name for f in FIELD_SPECS.get(document_type, ()) if f.required)
+
+
+def scalar_fields(document_type: str) -> tuple[FieldSpec, ...]:
+    return tuple(f for f in FIELD_SPECS.get(document_type, ()) if f.kind != "line_items")
+
 
 DOCUMENT_TYPES = tuple(FIELD_SPECS) + ("unknown",)
 

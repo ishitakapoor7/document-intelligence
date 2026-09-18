@@ -1,24 +1,32 @@
-"""The ingest pipeline: bytes -> typed, field-extracted, located, indexed chunks.
+"""The ingest pipeline: bytes -> typed, field-extracted, located, status-tagged chunks.
 
-Plain Python orchestration. The whole flow is nine steps with two early exits,
-which a state-machine framework would obscure rather than clarify.
+Plain Python orchestration. The recognition ladder is the interesting part:
+
+    Tesseract -> below MIN_OCR_FOR_VISION_FALLBACK? -> Claude vision -> re-measure
+              -> still below MIN_OCR_CONFIDENCE?    -> human review, extraction skipped
+
+Classification runs BEFORE the quality gate, because it survives poor recognition far
+better than field extraction does. A review item that says "this is a purchase order
+whose numbers cannot be trusted" is worth more than an untyped blob.
 """
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from docint.config import MANIFEST_PATH, MIN_OCR_CONFIDENCE, RUNS_DIR
-from docint.models import Chunk, IngestOutcome, ManifestEntry
+from docint.config import (
+    MANIFEST_PATH,
+    MIN_OCR_CONFIDENCE,
+    MIN_OCR_FOR_VISION_FALLBACK,
+    RUNS_DIR,
+    required_fields,
+)
+from docint.models import Chunk, Document, IngestOutcome, ManifestEntry
 from docint.parse import UnsupportedFileType, content_hash, finalize_chunks, parse
 from docint.understand import classify, extract
 
-
-# --------------------------------------------------------------------------- #
-# Manifest - keyed by content hash, so an unchanged file is detected before any
-# parsing, OCR or model call happens.
-# --------------------------------------------------------------------------- #
 
 def load_manifest() -> dict[str, ManifestEntry]:
     if not MANIFEST_PATH.exists():
@@ -34,61 +42,78 @@ def save_manifest(manifest: dict[str, ManifestEntry]) -> None:
     )
 
 
-# --------------------------------------------------------------------------- #
-
-def ingest_document(path: Path, manifest: dict[str, ManifestEntry],
-                    *, force: bool = False) -> IngestOutcome:
-    """Ingest one file. Returns what happened and why."""
+def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
+                    force: bool = False, vision_fallback: bool = True) -> IngestOutcome:
     path = Path(path)
+    started = time.perf_counter()
 
-    # 1. Content hash first: an unchanged file short-circuits everything below,
-    #    including both model calls. This is why a re-run is instant and free.
+    # 1. Content hash first - an unchanged file short-circuits everything below,
+    #    including every model call. This is why a re-run is instant and free.
     digest = content_hash(path)
     if not force and digest in manifest:
         return IngestOutcome(status="unchanged", detail=manifest[digest].document_id)
 
-    # 2. Parse - locations attached in-loop, IDs from content hash + location.
+    # 2. Parse. Locations attached in-loop; IDs from content hash + location.
     try:
         document, chunks = parse(path)
     except UnsupportedFileType as exc:
-        return IngestOutcome(status="unsupported", detail=str(exc))
+        return IngestOutcome(status="unsupported_format", detail=str(exc))
 
-    # 3. Classify BEFORE the quality gate. Classification survives poor OCR far
-    #    better than field extraction does, and "we know this is a purchase order
-    #    but cannot trust its numbers" is a far more useful review item than an
-    #    untyped blob. It is also the cheap call.
+    # 3. Recognition ladder: escalate a poorly-read scan to vision before judging it.
+    tess = document.ocr.tesseract_confidence
+    if (vision_fallback and tess is not None and tess < MIN_OCR_FOR_VISION_FALLBACK
+            and path.suffix.lower() == ".pdf"):
+        from docint.vision_ocr import escalate
+        chunks, legibility, cost, latency = escalate(path, chunks)
+        document.ocr.fallback_used = True
+        document.ocr.fallback_route = "claude"
+        document.ocr.post_fallback_confidence = legibility
+        document.ocr.fallback_cost_usd = cost
+        document.ocr.fallback_latency_s = latency
+
+    # 4. Classify. Runs before the quality gate; an unclear document becomes `unknown`
+    #    rather than being forced into a label.
     document.document_type, document.classification_confidence = classify(chunks)
     chunks = finalize_chunks(chunks, document)
 
     if document.document_type == "unknown":
-        _record(manifest, document, chunks)
-        return IngestOutcome(
-            status="unknown_type", document=document, chunks=chunks,
-            detail=(f"classification confidence {document.classification_confidence:.2f} "
-                    f"below threshold; no schema to extract against"),
-        )
-
-    # 4. Recognition quality gate. Too poor to trust -> human review, NOT silently
-    #    extracted. The document is still indexed so it stays findable.
-    if (document.ocr_mean_confidence is not None
-            and document.ocr_mean_confidence < MIN_OCR_CONFIDENCE):
-        document.needs_review = True
+        document.status = "unknown_type"
         document.review_reason = (
-            f"OCR mean confidence {document.ocr_mean_confidence:.1f} is below the "
-            f"{MIN_OCR_CONFIDENCE:.0f} threshold; extraction skipped rather than "
-            f"asserting values read from text we cannot trust."
-        )
-        _record(manifest, document, chunks)
-        return IngestOutcome(status="needs_review", document=document, chunks=chunks,
-                             detail=document.review_reason)
+            f"classification confidence {document.classification_confidence:.2f} below "
+            f"threshold, or no configured type fits; no schema to extract against")
+        return _finish(manifest, document, chunks, started)
 
-    # 5. Extract against the configured schema for this type.
-    document.fields = extract(document, chunks)
-    _record(manifest, document, chunks)
-    return IngestOutcome(status="ingested", document=document, chunks=chunks)
+    # 5. Quality gate, applied to the EFFECTIVE confidence - i.e. after any fallback.
+    effective = document.ocr_mean_confidence
+    if effective is not None and effective < MIN_OCR_CONFIDENCE:
+        document.status = "needs_review_ocr"
+        document.review_reason = (
+            f"recognition confidence {effective:.1f} is below the {MIN_OCR_CONFIDENCE:.0f} "
+            f"threshold" + (" even after vision fallback" if document.ocr.fallback_used else "")
+            + "; extraction skipped rather than asserting values read from text we cannot trust.")
+        return _finish(manifest, document, chunks, started)
+
+    # 6. Extract.
+    document.fields, document.line_items, document.extraction_cost_usd = extract(document, chunks)
+
+    # 7. A required field we could not read is a review item, NOT a silent gap - and
+    #    the classification is preserved so the reviewer knows what they are looking at.
+    present = {f.name for f in document.fields if f.value is not None}
+    missing = [n for n in required_fields(document.document_type) if n not in present]
+    if missing:
+        document.missing_required_fields = missing
+        document.status = "needs_review_missing_fields"
+        document.review_reason = (
+            f"required field(s) {', '.join(missing)} could not be read from this "
+            f"{document.document_type.replace('_', ' ')}; the document is typed but incomplete.")
+    else:
+        document.status = "extracted"
+
+    return _finish(manifest, document, chunks, started)
 
 
-def _record(manifest: dict[str, ManifestEntry], document, chunks: list[Chunk]) -> None:
+def _finish(manifest, document: Document, chunks: list[Chunk], started: float) -> IngestOutcome:
+    document.total_latency_s = time.perf_counter() - started
     manifest[document.content_hash] = ManifestEntry(
         content_hash=document.content_hash,
         document_id=document.document_id,
@@ -97,14 +122,18 @@ def _record(manifest: dict[str, ManifestEntry], document, chunks: list[Chunk]) -
         chunk_ids=[c.chunk_id for c in chunks],
         ingested_at=datetime.now(timezone.utc),
     )
+    return IngestOutcome(status=document.status, document=document, chunks=chunks,
+                         detail=document.review_reason)
 
 
-def ingest_directory(directory: Path, *, force: bool = False) -> list[tuple[Path, IngestOutcome]]:
+def ingest_directory(directory: Path, *, force: bool = False,
+                     vision_fallback: bool = True) -> list[tuple[Path, IngestOutcome]]:
     manifest = load_manifest()
     results = []
     for path in sorted(Path(directory).rglob("*")):
         if path.is_dir() or path.name.startswith("."):
             continue
-        results.append((path, ingest_document(path, manifest, force=force)))
+        results.append((path, ingest_document(path, manifest, force=force,
+                                              vision_fallback=vision_fallback)))
     save_manifest(manifest)
     return results

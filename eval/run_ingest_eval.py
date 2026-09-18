@@ -103,16 +103,45 @@ def evaluate(gold_path: Path, doc_dir: Path, label: str) -> tuple[Tally, list[st
                 mark = "OK " if ok else ("MISS" if pred is None else "FAIL")
                 print(f"    {mark} {field:<24} {str(pred):<30} expected={spec['value']!r}")
 
-        # cross-row consistency, where the gold file asks for it
+        # line items - the repeating data the scalar schema cannot hold
+        li_spec = expected.get("line_items")
+        if li_spec:
+            got_items = doc.line_items if doc else []
+            count_ok = len(got_items) == li_spec["count"]
+            tally.add(name, "__line_items__", "pass" if count_ok else "fail",
+                      f"got {len(got_items)}, expected {li_spec['count']}")
+            print(f"  {'OK ' if count_ok else 'FAIL'} line_items  {len(got_items)} extracted, "
+                  f"{li_spec['count']} expected")
+            for want in li_spec.get("items", []):
+                needle = want["description_contains"].lower()
+                hit = next((li for li in got_items if needle in (li.description or "").lower()), None)
+                if hit is None:
+                    tally.add(name, f"line:{needle}", "miss", "line not extracted")
+                    print(f"      MISS  {needle}")
+                    continue
+                bad = [k for k in ("quantity", "unit_price", "amount")
+                       if k in want and not matches(getattr(hit, k), want[k])]
+                tally.add(name, f"line:{needle}", "pass" if not bad else "fail",
+                          f"wrong: {bad}" if bad else "")
+                print(f"      {'OK  ' if not bad else 'FAIL'} {needle:<14} "
+                      f"qty={hit.quantity} unit={hit.unit_price} amt={hit.amount}"
+                      + (f"   WRONG: {bad}" if bad else ""))
+
+        # a schema that cannot represent the document is recorded as such, not as a pass
+        if expected.get("multi_record_schema_mismatch"):
+            tally.add(name, "__multi_record__", "schema_mismatch",
+                      "sheet holds 3 suppliers; schema describes 1; 2 silently discarded")
+            print("  ~   MULTI-RECORD SCHEMA MISMATCH: 3 suppliers present, 1 representable")
+
         if expected.get("consistency_requirement") and got:
             chunks = {f.chunk_id for f in got.values()}
             consistent = len(chunks) == 1
             tally.add(name, "__consistency__", "pass" if consistent else "fail",
                       f"fields drawn from {len(chunks)} chunk(s)")
-            print(f"  {'OK ' if consistent else 'FAIL'} all fields from one chunk "
-                  f"({len(chunks)} distinct chunk(s) cited)")
+            print(f"  {'OK ' if consistent else 'FAIL'} internal consistency: all fields from "
+                  f"{len(chunks)} chunk(s) (necessary, not sufficient)")
 
-        # field-level grounding: every value must cite a chunk that exists
+        # field-level grounding: every value must cite a chunk in this document
         ids = {c.chunk_id for c in outcome.chunks}
         ungrounded = [f.name for f in got.values() if f.chunk_id not in ids]
         if ungrounded:
@@ -123,21 +152,37 @@ def evaluate(gold_path: Path, doc_dir: Path, label: str) -> tuple[Tally, list[st
 
 
 def summarise(tally: Tally, label: str) -> None:
-    fields = [r for r in tally.rows if not r[1].startswith("__")]
     types = [r for r in tally.rows if r[1] == "__type__"]
-    scored = [r for r in fields if r[2] != "schema_mismatch"]
+    scalars = [r for r in tally.rows if not r[1].startswith("__") and not r[1].startswith("line:")]
+    lines = [r for r in tally.rows if r[1].startswith("line:") or r[1] == "__line_items__"]
+    scored_scalars = [r for r in scalars if r[2] != "schema_mismatch"]
 
     print(f"\n{'-' * 78}\n{label} SUMMARY")
     t_pass = sum(1 for r in types if r[2] == "pass")
-    print(f"  classification     {t_pass}/{len(types)}")
-    if scored:
-        f_pass = sum(1 for r in scored if r[2] == "pass")
-        print(f"  field extraction   {f_pass}/{len(scored)}  (excludes schema mismatches)")
+    print(f"  classification                {t_pass}/{len(types)}")
+    if scored_scalars:
+        f_pass = sum(1 for r in scored_scalars if r[2] == "pass")
+        print(f"  schema-representable scalars  {f_pass}/{len(scored_scalars)}")
+        print(f"     ^ this is NOT document accuracy. It counts only single-valued fields the")
+        print(f"       configured schema can hold; repeating and multi-record data is below.")
+    if lines:
+        l_pass = sum(1 for r in lines if r[2] == "pass")
+        print(f"  line items                    {l_pass}/{len(lines)}")
+
+    docs = {r[0] for r in tally.rows}
+    complete = 0
+    for d in docs:
+        rows = [r for r in tally.rows if r[0] == d]
+        if all(r[2] == "pass" for r in rows):
+            complete += 1
+    print(f"  DOCUMENT COMPLETENESS         {complete}/{len(docs)}  "
+          f"(documents with nothing wrong, missing or unrepresentable)")
+
     hall = tally.count("hallucination")
-    print(f"  hallucinations     {hall}   <-- values invented where the document has none")
+    print(f"  hallucinations                {hall}")
     mism = tally.count("schema_mismatch")
     if mism:
-        print(f"  schema mismatches  {mism}   (document well-formed, configured schema does not fit)")
+        print(f"  schema mismatches             {mism}  (document well-formed; schema cannot hold it)")
 
     failures = [r for r in tally.rows if r[2] in ("fail", "miss", "hallucination")]
     if failures:
@@ -146,8 +191,44 @@ def summarise(tally: Tally, label: str) -> None:
             print(f"    [{verdict:<13}] {doc} :: {field}  {detail}")
 
 
+def degraded_table(paths: list[Path]) -> None:
+    """The recognition ladder, end to end, with and without the vision fallback.
+
+    The paired rows are the point: the same bytes, the same thresholds, and the only
+    difference is whether the escalation was allowed to fire.
+    """
+    print(f"\n{'=' * 116}\nDEGRADED-CASE LADDER\n{'=' * 116}")
+    hdr = (f"{'document':<32}{'fb?':<5}{'class':<16}{'tess':>6}{'post':>7}"
+           f"{'decision':>30}{'missing':>18}{'cost':>9}{'lat':>6}")
+    print(hdr); print("-" * len(hdr))
+    for path in paths:
+        for allow in (False, True):
+            out = ingest_document(path, {}, vision_fallback=allow)
+            d = out.document
+            if d is None:
+                continue
+            tess = f"{d.ocr.tesseract_confidence:.1f}" if d.ocr.tesseract_confidence is not None else "-"
+            post = f"{d.ocr.post_fallback_confidence:.1f}" if d.ocr.post_fallback_confidence is not None else "-"
+            missing = ",".join(d.missing_required_fields) or "-"
+            cost = d.extraction_cost_usd + d.ocr.fallback_cost_usd
+            name = path.name if not allow else ""
+            print(f"{name:<32}{'yes' if allow else 'no':<5}{d.document_type:<16}{tess:>6}{post:>7}"
+                  f"{d.status:>30}{missing:>18}{cost:>9.4f}{d.total_latency_s:>6.1f}")
+        print()
+    print("  `post` is the vision model's SELF-REPORTED legibility - model-graded, and NOT")
+    print("  comparable to the Tesseract column, which is a measured classifier score.")
+
+
 if __name__ == "__main__":
     t1, _ = evaluate(GOLD_CONTROLLED, ROOT / "corpus", "CONTROLLED FIXTURES (written alongside the schemas)")
-    t2, _ = evaluate(GOLD_GENERAL, ROOT / "eval" / "generalization", "GENERALIZATION SET (written independently of the schemas)")
+    t2, _ = evaluate(GOLD_GENERAL, ROOT / "eval" / "generalization", "SYNTHETIC ADVERSARIAL SET (written independently of the schemas, same author)")
     summarise(t1, "CONTROLLED")
-    summarise(t2, "GENERALIZATION")
+    summarise(t2, "SYNTHETIC ADVERSARIAL")
+    degraded_table([
+        ROOT / "eval" / "scans" / "po_acme_001_L1_clean.pdf",
+        ROOT / "eval" / "scans" / "po_acme_001_L2_medium.pdf",
+        ROOT / "eval" / "scans" / "po_acme_001_L3_degraded.pdf",
+        ROOT / "eval" / "generalization" / "G2_invoice_stamped_scan.pdf",
+        ROOT / "eval" / "generalization" / "G4_po_amended_scan.pdf",
+        ROOT / "eval" / "generalization" / "G6_receipt_thermal_scan.pdf",
+    ])

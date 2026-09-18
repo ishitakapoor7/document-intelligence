@@ -18,8 +18,10 @@ from docint.config import (
     MODEL_CLASSIFY,
     MODEL_EXTRACT,
     TYPE_KEYWORDS,
+    scalar_fields,
+    usd_cost,
 )
-from docint.models import Chunk, Document, DocumentType, ExtractedField
+from docint.models import Chunk, Document, DocumentType, ExtractedField, LineItem
 
 # Document text is untrusted input. It is delimited and the model is told so in
 # every prompt that carries it.
@@ -52,6 +54,41 @@ def lexical_prior(text: str) -> tuple[str | None, int]:
     return (best, scores[best]) if scores[best] else (None, 0)
 
 
+# Type definitions, not just type names. Written after a retail receipt was classified
+# `invoice` at 0.95 confidence: the taxonomy listed four labels but never said what
+# distinguished them, and `invoice` is a plausible answer for anything carrying a
+# vendor, a date and a total. Naming what each type is FOR - and naming the near-misses
+# explicitly - is cheaper than any confidence threshold, because a confidence gate
+# cannot catch a model that is confidently wrong.
+TYPE_DEFINITIONS = """\
+invoice
+    A seller's REQUEST FOR PAYMENT, issued to a named business customer for goods or
+    services already supplied. Carries an invoice number, payment terms, and an amount
+    the recipient still owes.
+
+purchase_order
+    A buyer's COMMITMENT TO PURCHASE, issued before supply. Includes blanket purchase
+    agreements and call-off contracts. Carries an order or agreement number and a
+    committed, maximum or not-to-exceed value.
+
+vendor_record
+    A buyer's INTERNAL RECORD of agreed terms with a supplier - contracted rates,
+    effective dates, payment terms. Not addressed to anyone; it is reference data.
+
+unknown
+    Anything else. Use this whenever the document is not clearly one of the three
+    above, even when it looks similar. In particular:
+      - a RETAIL RECEIPT or point-of-sale slip is `unknown`, NOT an invoice. A receipt
+        evidences payment ALREADY MADE; an invoice requests payment still owed.
+        Signals: a store or branch number, a register/transaction number, a tendered
+        payment line (CASH / VISA ****1234), "RETURNS WITHIN N DAYS".
+      - a delivery note, packing slip, quotation, statement of account, remittance
+        advice or credit note is `unknown`.
+      - any document unrelated to procurement is `unknown`.
+    Answering `unknown` is a correct and expected outcome, and is preferred over a
+    confident guess."""
+
+
 def classify(chunks: list[Chunk]) -> tuple[DocumentType, float]:
     """Assign a document type, or `unknown` rather than forcing a bad label."""
     sample = "\n\n".join(c.text for c in chunks[:2])[:6000]
@@ -59,9 +96,8 @@ def classify(chunks: list[Chunk]) -> tuple[DocumentType, float]:
     llm = ChatAnthropic(model=MODEL_CLASSIFY, max_tokens=1024)
     verdict = llm.with_structured_output(_Verdict).invoke(
         f"{UNTRUSTED}\n\n"
-        "Classify this document as exactly one of: invoice, purchase_order, "
-        "vendor_record, unknown. Use `unknown` if it does not clearly fit one of "
-        "the first three.\n\n"
+        "Classify this document using these definitions.\n\n"
+        f"{TYPE_DEFINITIONS}\n\n"
         f"<document>\n{sample}\n</document>"
     )
 
@@ -73,15 +109,14 @@ def classify(chunks: list[Chunk]) -> tuple[DocumentType, float]:
 
     # Guard 2 (deterministic): disagreement with a keyword count costs confidence.
     #
-    # This is the only cross-check applied here. An earlier version also penalised
-    # a classification whose cited evidence was not found verbatim in the text -
-    # that was removed because it demoted CORRECT classifications to `unknown`: the
-    # model reasonably answers with a synthesised span ("INVOICE; Invoice Number:
-    # INV-2026-0117; Total Due: $12,480.00") that is accurate but contiguous
-    # nowhere, and whether it happened to be verbatim varied between runs. A guard
-    # that randomly discards right answers is worse than no guard. Evidence is
-    # still returned and recorded; real evidence grounding happens in extract(),
-    # where a wrong quote actually costs something.
+    # The only cross-check applied here. An earlier version also penalised a
+    # classification whose cited evidence was not found verbatim in the text. That was
+    # removed because it demoted CORRECT classifications to `unknown`: the model
+    # reasonably answers with a synthesised span ("INVOICE; Invoice Number:
+    # INV-2026-0117; Total Due: $12,480.00") that is accurate but contiguous nowhere,
+    # and whether it happened to match varied between runs. A guard that randomly
+    # discards right answers is worse than no guard. Real evidence grounding happens in
+    # extract(), where a wrong quote actually costs something.
     prior, hits = lexical_prior(sample)
     if prior and hits >= 2 and prior != label:
         confidence *= 0.5
@@ -98,26 +133,39 @@ def classify(chunks: list[Chunk]) -> tuple[DocumentType, float]:
 _PY_TYPE = {"identifier": str, "string": str, "date": str, "currency": float, "number": float}
 
 
+class _LineItem(BaseModel):
+    description: str | None = Field(default=None, description="what this line is for")
+    quantity: float | None = Field(default=None, description="units on THIS line")
+    unit_price: float | None = Field(default=None, description="price per unit on THIS line")
+    amount: float | None = Field(default=None, description="line total")
+
+
 def _extraction_schema(document_type: str) -> type[BaseModel]:
     """Build the output schema from FIELD_SPECS, so adding a type is config-only."""
-    specs = FIELD_SPECS[document_type]
     fields: dict = {}
-    for spec in specs:
+    for spec in FIELD_SPECS[document_type]:
+        if spec.kind == "line_items":
+            fields[spec.name] = (list[_LineItem],
+                                 Field(default_factory=list, description=spec.description))
+            continue
         value_model = create_model(
             f"{spec.name}_value",
             value=(_PY_TYPE[spec.kind] | None,
                    Field(description=f"{spec.description}. null if genuinely absent.")),
-            evidence_quote=(str, Field(description="verbatim text from the document containing this value")),
-            chunk_id=(str, Field(description="the id of the chunk this value was read from")),
+            evidence_quote=(str, Field(description="verbatim text containing this value")),
+            chunk_id=(str, Field(description="id of the chunk this value was read from")),
         )
         fields[spec.name] = (value_model | None, Field(default=None))
     return create_model(f"{document_type}_extraction", **fields)
 
 
-def extract(document: Document, chunks: list[Chunk]) -> list[ExtractedField]:
-    """Pull the configured fields, each tied to the chunk it came from."""
+def extract(document: Document, chunks: list[Chunk]):
+    """Pull the configured fields, each tied to the chunk it came from.
+
+    Returns (scalar fields, line items, cost in USD).
+    """
     if document.document_type == "unknown":
-        return []
+        return [], [], 0.0
 
     by_id = {c.chunk_id: c for c in chunks}
     rendered = "\n\n".join(
@@ -125,20 +173,27 @@ def extract(document: Document, chunks: list[Chunk]) -> list[ExtractedField]:
     )[:24000]
 
     schema = _extraction_schema(document.document_type)
-    llm = ChatAnthropic(model=MODEL_EXTRACT, max_tokens=4096)
-    result = llm.with_structured_output(schema).invoke(
+    llm = ChatAnthropic(model=MODEL_EXTRACT, max_tokens=8192)
+    result = llm.with_structured_output(schema, include_raw=True).invoke(
         f"{UNTRUSTED}\n\n"
         f"Extract the requested fields from this {document.document_type.replace('_', ' ')}. "
-        "For every field give the value, a verbatim evidence_quote containing it, and the "
-        "chunk_id of the chunk you read it from. Use null for any field genuinely absent. "
+        "For each scalar field give the value, a verbatim evidence_quote containing it, and "
+        "the chunk_id you read it from. Use null for any field genuinely absent - do NOT "
+        "infer, derive or invent a value that is not printed on the document. "
+        "List EVERY billed or ordered line in line_items; do not summarise or truncate. "
         "Dates must be ISO YYYY-MM-DD. Currency and numeric values must be plain numbers "
         "with no symbols or thousands separators.\n\n"
         f"<document>\n{rendered}\n</document>"
     )
 
-    fields: list[ExtractedField] = []
-    for spec in FIELD_SPECS[document.document_type]:
-        payload = getattr(result, spec.name, None)
+    parsed = result["parsed"]
+    raw = result.get("raw")
+    usage = (raw.usage_metadata or {}) if raw is not None else {}
+    cost = usd_cost(MODEL_EXTRACT, usage.get("input_tokens", 0), usage.get("output_tokens", 0))
+
+    fields = []
+    for spec in scalar_fields(document.document_type):
+        payload = getattr(parsed, spec.name, None)
         if payload is None or payload.value is None:
             continue
 
@@ -146,17 +201,18 @@ def extract(document: Document, chunks: list[Chunk]) -> list[ExtractedField]:
         chunk = by_id.get(payload.chunk_id)
         quote = (payload.evidence_quote or "").strip()
         if quote and (chunk is None or quote not in chunk.text):
-            located = next((c for c in chunks if quote in c.text), None)
-            chunk = located or chunk
+            chunk = next((c for c in chunks if quote in c.text), None) or chunk
         if chunk is None:
             continue
 
-        fields.append(
-            ExtractedField(
-                name=spec.name,
-                value=payload.value,
-                chunk_id=chunk.chunk_id,
-                ocr_confidence=chunk.ocr_confidence,
-            )
-        )
-    return fields
+        fields.append(ExtractedField(name=spec.name, value=payload.value,
+                                     chunk_id=chunk.chunk_id,
+                                     ocr_confidence=chunk.ocr_confidence))
+
+    items = [
+        LineItem(description=li.description, quantity=li.quantity,
+                 unit_price=li.unit_price, amount=li.amount,
+                 chunk_id=chunks[0].chunk_id if chunks else None)
+        for li in (getattr(parsed, "line_items", None) or [])
+    ]
+    return fields, items, cost

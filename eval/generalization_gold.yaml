@@ -28,9 +28,16 @@ documents:
       vendor_name:    {value: "Northstar Fabrication Ltd."}
       invoice_date:   {value: "2026-04-11"}               # from "11 April 2026"
       po_reference:   {value: "PO-2026-0091"}             # labelled "Your Order"
-      quantity:       {schema_mismatch: "six line items; the schema assumes one"}
-      unit_price:     {schema_mismatch: "six distinct rates; the schema assumes one"}
       total_amount:   {value: 4865.45}                    # labelled "Amount Payable"
+    line_items:
+      count: 6                                            # 4 on page 1, 2 on page 2
+      items:
+        - {description_contains: "bracket",  quantity: 120, unit_price: 18.40, amount: 2208.00}
+        - {description_contains: "dowel",    quantity: 500, unit_price: 1.15,  amount: 575.00}
+        - {description_contains: "Weld nut", quantity: 800, unit_price: 0.62,  amount: 496.00}
+        - {description_contains: "gland",    quantity: 250, unit_price: 2.05,  amount: 512.50}
+        - {description_contains: "Hex bolt", quantity: 300, unit_price: 0.94,  amount: 282.00}
+        - {description_contains: "Carriage", quantity: 1,   unit_price: 85.00, amount: 85.00}
 
   G2_invoice_stamped_scan.pdf:
     what_makes_it_hard: >-
@@ -44,9 +51,13 @@ documents:
       vendor_name:    {value: "Bayside Electrical Supply"}
       invoice_date:   {value: "2026-03-22"}
       po_reference:   {must_be_null: "absent from the document - extracting a value here is a hallucination"}
-      quantity:       {schema_mismatch: "three line items"}
-      unit_price:     {schema_mismatch: "three line items"}
       total_amount:   {value: 4942.00}
+    line_items:
+      count: 3
+      items:
+        - {description_contains: "THHN",       quantity: 12, amount: 1428.00}
+        - {description_contains: "Panelboard", quantity: 4,  amount: 3196.00}
+        - {description_contains: "EMT",        quantity: 40, amount: 318.00}
 
   G3_blanket_purchase_agreement.pdf:
     what_makes_it_hard: >-
@@ -61,6 +72,12 @@ documents:
       issue_date:       {value: "2026-01-15"}             # labelled "Effective"
       buyer_entity:     {value: "Northwind Manufacturing LLC"}
       committed_amount: {value: 200150.00}                # labelled "Maximum Commitment"
+    line_items:
+      count: 3
+      items:
+        - {description_contains: "fastener",   quantity: 2000, unit_price: 68.00,  amount: 136000.00}
+        - {description_contains: "collar",     quantity: 1500, unit_price: 22.50,  amount: 33750.00}
+        - {description_contains: "inspection", quantity: 40,   unit_price: 760.00, amount: 30400.00}
 
   G4_po_amended_scan.pdf:
     what_makes_it_hard: >-
@@ -103,15 +120,20 @@ documents:
       vendor, so which row is extracted is genuinely underdetermined.
     expect_document_type: vendor_record
     expect_file_type: xlsx
+    expect_status: needs_review_missing_fields
+    # UPDATED after observing the behaviour. An earlier version of this gold accepted
+    # "any one of the three suppliers" as a pass. That was wrong. Returning one
+    # arbitrary row from a three-row sheet is not a correct answer - a consumer would
+    # believe the workbook describes a single supplier at that rate. The right outcome
+    # is what the pipeline now does: decline to pick, leave the required fields empty,
+    # and route to human review with the classification preserved.
     fields:
-      vendor_id:               {any_of: ["SUP-0098", "SUP-0101", "SUP-0112"], note: "three suppliers; schema describes one"}
-      vendor_name:             {any_of: ["Harlow Components GmbH", "Vertex Aerospace Components", "Northstar Fabrication Ltd."]}
-      contracted_unit_price:   {any_of: [124.00, 68.00, 18.40]}
-      contract_effective_date: {any_of: ["2026-02-01", "2026-01-15", "2026-03-01"]}
-      payment_terms:           {any_of: ["45 days", "Net 60", "30 days"]}
+      vendor_id:               {must_be_null: "three candidate suppliers; picking one arbitrarily is fabrication"}
+      vendor_name:             {must_be_null: "three candidate suppliers"}
+      contracted_unit_price:   {must_be_null: "three candidate rates - 124.00 / 68.00 / 18.40"}
     consistency_requirement: >-
-      Whichever supplier is chosen, all five fields must come from the SAME row.
-      Mixing attributes across rows would be the serious failure here.
+      If a future repeating-vendor schema is added and values ARE returned, all fields
+      for a given supplier must come from the same row.
 
   G8_safety_data_sheet.pdf:
     what_makes_it_hard: >-

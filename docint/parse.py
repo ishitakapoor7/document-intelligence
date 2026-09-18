@@ -27,7 +27,7 @@ from docint.config import (
     OCR_RENDER_DPI,
     access_tag_for,
 )
-from docint.models import Chunk, Document, FileType, SourceLocation
+from docint.models import Chunk, Document, FileType, OcrTelemetry, SourceLocation
 
 
 class UnsupportedFileType(Exception):
@@ -233,8 +233,7 @@ def parse(path: Path) -> tuple[Document, list[Chunk]]:
         content_hash=doc_hash,
         access_tag=access_tag,
         page_count=unit_count,
-        ocr_mean_confidence=mean_conf,
-        ocr_route="tesseract" if mean_conf is not None else None,
+        ocr=OcrTelemetry(tesseract_confidence=mean_conf),
     )
     return document, chunks
 
