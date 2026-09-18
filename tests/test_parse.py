@@ -23,8 +23,10 @@ def test_digital_pdf_uses_text_layer_not_ocr():
 def test_scanned_pdf_routes_through_ocr_with_confidence():
     doc, chunks = parse(PO)
     assert doc.file_type == "pdf_scanned"
-    assert doc.ocr_route == "tesseract"
-    assert 0.0 <= doc.ocr_mean_confidence <= 100.0
+    assert doc.ocr.tesseract_confidence is not None
+    assert 0.0 <= doc.ocr.tesseract_confidence <= 100.0
+    assert not doc.ocr.fallback_used, "parse() is deterministic; escalation happens in ingest"
+    assert doc.ocr_mean_confidence == doc.ocr.tesseract_confidence
     assert all(0.0 <= c.ocr_confidence <= 100.0 for c in chunks)
     assert "PO-2026-0043" in chunks[0].text
 
@@ -71,3 +73,18 @@ def test_access_tags_come_from_config_not_the_file():
 def test_unsupported_format_is_a_typed_failure():
     with pytest.raises(UnsupportedFileType):
         parse(ROOT / "requirements.txt")
+
+
+def test_effective_confidence_reflects_the_fallback():
+    """ocr_mean_confidence is a property over telemetry, so 'how well was this read'
+    has exactly one answer and cannot drift from the numbers it derives from."""
+    from docint.models import Document, OcrTelemetry
+
+    doc = Document(document_id="d", filename="f.pdf", file_type="pdf_scanned",
+                   content_hash="h", access_tag="procurement",
+                   ocr=OcrTelemetry(tesseract_confidence=43.4))
+    assert doc.ocr_mean_confidence == 43.4
+
+    doc.ocr = OcrTelemetry(tesseract_confidence=43.4, fallback_used=True,
+                           fallback_route="claude", post_fallback_confidence=88.0)
+    assert doc.ocr_mean_confidence == 88.0
