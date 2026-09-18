@@ -31,13 +31,61 @@ and that upscaling adds interpolation damage the probe never saw. The true figur
 Tesseract returned no words at all at the bottom rung. That makes the interesting middle
 state - readable enough to extract, poor enough to distrust - untestable.
 
-## Finding: confidence tracked correctness here
+## Finding: confidence tracked correctness here - and the corruption case did NOT reproduce
 
-The ladder was originally designed to demonstrate *silent corruption* - a field read
-confidently but wrongly, which is what quietly poisons a RAG pipeline. That case did not
-reproduce. By the time values corrupted, confidence had already fallen below the review
-threshold. On this corpus the signal was informative, and L2 instead demonstrates the
-honest middle state: correct values, surfaced as untrusted.
+The ladder was originally designed to demonstrate **silent corruption**: a field read
+confidently but wrongly. That is the failure that matters most in production, because it
+is the one a RAG pipeline cannot detect - garbage OCR text gets embedded, retrieved and
+answered from with no signal that anything is wrong.
 
-This is one page of one synthetic document. It is not evidence that Tesseract confidence
-is well-calibrated in general.
+**It did not reproduce on this corpus.** Every attempt to produce a confidently-wrong value
+failed in the same way: by the time values corrupted, mean confidence had already fallen
+below the review threshold. The measured relationship was monotonic -
+
+| | conf | values |
+|---|---|---|
+| L1 | 95.1 | all correct |
+| L2 | 62.4 | all correct, flagged |
+| L3 | 43.4 | corrupted, and already below the review gate |
+
+On this corpus, Tesseract's confidence **tracked correctness**. The gate caught what the
+gate was for.
+
+**This finding was not engineered and has not been worked around.** No silent-corruption
+example has been manufactured, because a synthetic failure would prove nothing about the
+system - it would only prove that a degradation script can be tuned until a threshold is
+crossed. What is reported is what was observed.
+
+**Scope of the claim.** This is one page of one synthetic document, degraded by a script,
+read by one OCR engine at one set of settings. It is **not** evidence that Tesseract
+confidence is well calibrated in general, and it should not be read as one. Confidence
+calibration is a property of a corpus, not of an engine.
+
+## Future eval case: confidently wrong OCR
+
+**The most important gap in this evaluation.** A document where OCR reports high confidence
+and returns a wrong value is the case the whole trust architecture exists for, and this
+corpus does not contain one. Until it does, the low-confidence flagging and review routing
+are demonstrated but not *stress-tested*.
+
+Real-world sources of confidently-wrong OCR, none present here:
+
+- **Digit confusion in clean scans** - `5`/`6`, `1`/`7`, `0`/`8` in a crisp typeface. Tesseract
+  reports high confidence on a well-formed glyph it has simply read as the wrong character.
+  On an invoice total this is the difference between $12,480.00 and $12,486.00, with nothing
+  to flag it.
+- **Thousands separators and decimal points** dropped or misplaced - a confident `12480.00`
+  read as `1248000`.
+- **Stamps, handwriting and annotations** overlaying printed text, producing confident reads
+  of the wrong layer.
+- **Multi-column or table-adjacent text** where values are confidently read but associated
+  with the wrong label - the value is right, the field is wrong.
+- **Photocopier banding and toner streaks** that remove a character cleanly rather than
+  blurring it.
+
+How it would be built: hand-author a scan whose ground truth differs from its OCR output in
+a single digit, with measured high confidence on that token. Score it as its own eval case
+asserting that the system either catches it or is recorded as having missed it. The point is
+not to pass - a system that cannot catch this should report that it cannot.
+
+This is listed in the README as the first thing to add, ahead of corpus size.

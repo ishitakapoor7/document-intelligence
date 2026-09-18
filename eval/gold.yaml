@@ -69,12 +69,16 @@ scan_ladder:
       expect_fields_flagged_low_confidence: []
 
 # FINDING, recorded rather than engineered around: on this corpus Tesseract's
-# confidence tracks correctness. There is no observed band where confidence is high
-# and a value is silently wrong - by the time values corrupt, confidence has already
+# confidence tracked correctness. There is no observed band where confidence is high
+# and a value is silently wrong - by the time values corrupted, confidence had already
 # fallen below the review threshold. An earlier version of this file asserted a
 # corrupted vendor_name at L2; that came from a probe measuring a path the pipeline
-# never takes, and it did not reproduce. The honest result is that the confidence
-# signal was informative here, on one page of one document.
+# never takes, and it did not reproduce.
+#
+# No silent-corruption example has been manufactured to fill the gap. A synthetic
+# failure would only prove that a degradation script can be tuned until a threshold
+# is crossed. See eval/ocr_ladder.md -> "Future eval case: confidently wrong OCR",
+# which is the single most important missing case in this evaluation.
 
 # The cross-document question. Requires all three document types, and both a
 # digital and a scanned source.
