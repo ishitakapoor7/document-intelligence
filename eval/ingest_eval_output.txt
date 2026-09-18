@@ -1,0 +1,117 @@
+
+==============================================================================
+CONTROLLED FIXTURES (written alongside the schemas)
+==============================================================================
+
+invoice_acme_001.pdf
+  type       OK  got=invoice          expected=invoice          conf=0.99
+  ocr        digital  file_type=pdf_digital  status=ingested
+    OK  invoice_number           INV-2026-0117                  expected='INV-2026-0117'
+    OK  vendor_name              Acme Industrial Supply Co.     expected='Acme Industrial Supply Co.'
+    OK  invoice_date             2026-03-14                     expected='2026-03-14'
+    OK  po_reference             PO-2026-0043                   expected='PO-2026-0043'
+    OK  quantity                 80.0                           expected=80
+    OK  unit_price               156.0                          expected=156.0
+    OK  total_amount             12480.0                        expected=12480.0
+
+po_acme_001.pdf
+  type       OK  got=purchase_order   expected=purchase_order   conf=0.99
+  ocr        95.1     file_type=pdf_scanned  status=ingested
+    OK  po_number                PO-2026-0043                   expected='PO-2026-0043'
+    OK  vendor_name              Acme Industrial Supply Co.     expected='Acme Industrial Supply Co.'
+    OK  issue_date               2026-02-28                     expected='2026-02-28'
+    OK  buyer_entity             Northwind Manufacturing LLC    expected='Northwind Manufacturing LLC'
+    OK  committed_amount         12000.0                        expected=12000.0
+
+vendor_records.xlsx
+  type       OK  got=vendor_record    expected=vendor_record    conf=0.95
+  ocr        digital  file_type=xlsx         status=ingested
+    OK  vendor_id                V-1042                         expected='V-1042'
+    OK  vendor_name              Acme Industrial Supply Co.     expected='Acme Industrial Supply Co.'
+    OK  contracted_unit_price    150.0                          expected=150.0
+    OK  contract_effective_date  2026-01-01                     expected='2026-01-01'
+    OK  payment_terms            Net 30                         expected='Net 30'
+
+==============================================================================
+GENERALIZATION SET (written independently of the schemas)
+==============================================================================
+
+G1_invoice_northstar_multipage.pdf
+  type       OK  got=invoice          expected=invoice          conf=0.99
+  ocr        digital  file_type=pdf_digital  status=ingested
+    OK  invoice_number           NF/24518                       expected='NF/24518'
+    OK  vendor_name              Northstar Fabrication Ltd.     expected='Northstar Fabrication Ltd.'
+    OK  invoice_date             2026-04-11                     expected='2026-04-11'
+    OK  po_reference             PO-2026-0091                   expected='PO-2026-0091'
+    ~   quantity                 120.0                          SCHEMA MISMATCH: six line items; the schema assumes one
+    ~   unit_price               18.4                           SCHEMA MISMATCH: six distinct rates; the schema assumes one
+    OK  total_amount             4865.45                        expected=4865.45
+
+G2_invoice_stamped_scan.pdf
+  type       OK  got=invoice          expected=invoice          conf=0.99
+  ocr        89.1     file_type=pdf_scanned  status=ingested
+    OK  invoice_number           BES-77310                      expected='BES-77310'
+    OK  vendor_name              BAYSIDE ELECTRICAL SUPPLY      expected='Bayside Electrical Supply'
+    OK  invoice_date             2026-03-22                     expected='2026-03-22'
+    OK  po_reference             None                           correctly absent
+    ~   quantity                 12.0                           SCHEMA MISMATCH: three line items
+    ~   unit_price               None                           SCHEMA MISMATCH: three line items
+    OK  total_amount             4942.0                         expected=4942.0
+
+G3_blanket_purchase_agreement.pdf
+  type       OK  got=purchase_order   expected=purchase_order   conf=0.95
+  ocr        digital  file_type=pdf_digital  status=ingested
+    OK  po_number                BPA-4471-26                    expected='BPA-4471-26'
+    OK  vendor_name              Vertex Aerospace Components Inc. expected='Vertex Aerospace Components Inc.'
+    OK  issue_date               2026-01-15                     expected='2026-01-15'
+    OK  buyer_entity             Northwind Manufacturing LLC    expected='Northwind Manufacturing LLC'
+    OK  committed_amount         200150.0                       expected=200150.0
+
+G4_po_amended_scan.pdf
+  type       OK  got=purchase_order   expected=purchase_order   conf=0.95
+  ocr        55.1     file_type=pdf_scanned  status=ingested
+    OK  po_number                HC-2026-8802                   expected='HC-2026-8802'
+    MISS vendor_name              None                           expected='Harlow Components GmbH'
+    OK  issue_date               2026-03-05                     expected='2026-03-05'
+    OK  buyer_entity             Northwind Manufacturing LLC    expected='Northwind Manufacturing LLC'
+    MISS committed_amount         None                           expected=18750.0
+
+G5_receipt_office_supply.pdf
+  type       FAIL got=invoice          expected=unknown          conf=0.95
+  ocr        digital  file_type=pdf_digital  status=ingested
+
+G6_receipt_thermal_scan.pdf
+  type       OK  got=unknown          expected=unknown          conf=0.85
+  ocr        33.3     file_type=pdf_scanned  status=unknown_type
+
+G7_supplier_terms_horizontal.xlsx
+  type       OK  got=vendor_record    expected=vendor_record    conf=0.92
+  ocr        digital  file_type=xlsx         status=ingested
+    OK  vendor_id                SUP-0098                       (any of ['SUP-0098', 'SUP-0101', 'SUP-0112'])
+    OK  vendor_name              Harlow Components GmbH         (any of ['Harlow Components GmbH', 'Vertex Aerospace Components', 'Northstar Fabrication Ltd.'])
+    OK  contracted_unit_price    124.0                          (any of [124.0, 68.0, 18.4])
+    OK  contract_effective_date  2026-02-01                     (any of ['2026-02-01', '2026-01-15', '2026-03-01'])
+    OK  payment_terms            45 days                        (any of ['45 days', 'Net 60', '30 days'])
+  OK  all fields from one chunk (1 distinct chunk(s) cited)
+
+G8_safety_data_sheet.pdf
+  type       OK  got=unknown          expected=unknown          conf=0.95
+  ocr        digital  file_type=pdf_digital  status=unknown_type
+
+------------------------------------------------------------------------------
+CONTROLLED SUMMARY
+  classification     3/3
+  field extraction   17/17  (excludes schema mismatches)
+  hallucinations     0   <-- values invented where the document has none
+
+------------------------------------------------------------------------------
+GENERALIZATION SUMMARY
+  classification     7/8
+  field extraction   23/25  (excludes schema mismatches)
+  hallucinations     0   <-- values invented where the document has none
+  schema mismatches  4   (document well-formed, configured schema does not fit)
+
+  FAILURES (3):
+    [miss         ] G4_po_amended_scan.pdf :: vendor_name  got None, expected 'Harlow Components GmbH'
+    [miss         ] G4_po_amended_scan.pdf :: committed_amount  got None, expected 18750.0
+    [fail         ] G5_receipt_office_supply.pdf :: __type__  got invoice, expected unknown

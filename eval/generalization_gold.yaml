@@ -1,0 +1,122 @@
+# Ground truth for the generalization set (eval/generalization/).
+#
+# Authored by hand AFTER the documents, by reading them as a person would. The
+# configured schemas in docint/config.py were NOT changed to accommodate any of
+# this - that is the point of the exercise.
+#
+# Three outcome categories, deliberately distinguished:
+#
+#   value:        the document states this, and the pipeline should extract it
+#   must_be_null: the document genuinely does not contain it; extracting anything
+#                 here is a HALLUCINATION, which is worse than a miss
+#   schema_mismatch: the document is well-formed but the configured schema does not
+#                 fit it (e.g. a single `quantity` field against a six-line invoice).
+#                 Not a pipeline bug. Recorded separately, because conflating it with
+#                 an extraction error would hide the real finding.
+
+documents:
+
+  G1_invoice_northstar_multipage.pdf:
+    what_makes_it_hard: >-
+      Alternate labels throughout (Our Ref / Bill Date / Your Order / Amount
+      Payable), a long-form date, two pages with the line-item table continuing
+      overleaf, and extra fields with no schema slot (settlement discount, VAT).
+    expect_document_type: invoice
+    expect_file_type: pdf_digital
+    fields:
+      invoice_number: {value: "NF/24518"}                 # labelled "Our Ref"
+      vendor_name:    {value: "Northstar Fabrication Ltd."}
+      invoice_date:   {value: "2026-04-11"}               # from "11 April 2026"
+      po_reference:   {value: "PO-2026-0091"}             # labelled "Your Order"
+      quantity:       {schema_mismatch: "six line items; the schema assumes one"}
+      unit_price:     {schema_mismatch: "six distinct rates; the schema assumes one"}
+      total_amount:   {value: 4865.45}                    # labelled "Amount Payable"
+
+  G2_invoice_stamped_scan.pdf:
+    what_makes_it_hard: >-
+      Scanned, with a rotated PAID stamp and a handwritten cheque annotation over
+      the body. Critically, it carries NO purchase-order reference of any kind -
+      po_reference must come back null rather than invented.
+    expect_document_type: invoice
+    expect_file_type: pdf_scanned
+    fields:
+      invoice_number: {value: "BES-77310"}
+      vendor_name:    {value: "Bayside Electrical Supply"}
+      invoice_date:   {value: "2026-03-22"}
+      po_reference:   {must_be_null: "absent from the document - extracting a value here is a hallucination"}
+      quantity:       {schema_mismatch: "three line items"}
+      unit_price:     {schema_mismatch: "three line items"}
+      total_amount:   {value: 4942.00}
+
+  G3_blanket_purchase_agreement.pdf:
+    what_makes_it_hard: >-
+      Never uses the words "purchase order" - it is a BLANKET PURCHASE AGREEMENT.
+      Has no single total line; the cap is stated as "Maximum Commitment" beneath
+      a three-line table of per-line values.
+    expect_document_type: purchase_order
+    expect_file_type: pdf_digital
+    fields:
+      po_number:        {value: "BPA-4471-26"}            # labelled "Agreement No."
+      vendor_name:      {value: "Vertex Aerospace Components Inc."}
+      issue_date:       {value: "2026-01-15"}             # labelled "Effective"
+      buyer_entity:     {value: "Northwind Manufacturing LLC"}
+      committed_amount: {value: 200150.00}                # labelled "Maximum Commitment"
+
+  G4_po_amended_scan.pdf:
+    what_makes_it_hard: >-
+      Scanned, with a handwritten amendment striking through the printed order
+      value and writing a different figure above it. The printed value is the
+      authoritative one - the amendment is unsigned and the document itself says
+      amendments must be countersigned. A system that reads handwriting as
+      authoritative is wrong here, and one that silently merges the two is worse.
+    expect_document_type: purchase_order
+    expect_file_type: pdf_scanned
+    fields:
+      po_number:        {value: "HC-2026-8802"}           # labelled "Order No."
+      vendor_name:      {value: "Harlow Components GmbH"}
+      issue_date:       {value: "2026-03-05"}             # labelled "Dated"
+      buyer_entity:     {value: "Northwind Manufacturing LLC"}
+      committed_amount: {value: 18750.00, note: "printed value; handwritten 19,400.00 is an uncountersigned amendment"}
+
+  G5_receipt_office_supply.pdf:
+    what_makes_it_hard: >-
+      A retail receipt. Invoice-adjacent - it has a vendor, a date, line items and
+      a total - but it is not one of the three configured types. The correct answer
+      is `unknown`. Forcing it into `invoice` is the failure this case tests for.
+    expect_document_type: unknown
+    expect_file_type: pdf_digital
+    fields: {}
+
+  G6_receipt_thermal_scan.pdf:
+    what_makes_it_hard: >-
+      A scanned thermal fuel receipt: narrow, monospaced, degraded. Unsupported
+      type AND poor recognition at once.
+    expect_document_type: unknown
+    expect_file_type: pdf_scanned
+    fields: {}
+
+  G7_supplier_terms_horizontal.xlsx:
+    what_makes_it_hard: >-
+      A vendor record laid out horizontally (one supplier per row, attributes across
+      columns) on a sheet called "Supplier Terms" rather than "Vendors", and holding
+      THREE suppliers rather than one. The configured schema describes a single
+      vendor, so which row is extracted is genuinely underdetermined.
+    expect_document_type: vendor_record
+    expect_file_type: xlsx
+    fields:
+      vendor_id:               {any_of: ["SUP-0098", "SUP-0101", "SUP-0112"], note: "three suppliers; schema describes one"}
+      vendor_name:             {any_of: ["Harlow Components GmbH", "Vertex Aerospace Components", "Northstar Fabrication Ltd."]}
+      contracted_unit_price:   {any_of: [124.00, 68.00, 18.40]}
+      contract_effective_date: {any_of: ["2026-02-01", "2026-01-15", "2026-03-01"]}
+      payment_terms:           {any_of: ["45 days", "Net 60", "30 days"]}
+    consistency_requirement: >-
+      Whichever supplier is chosen, all five fields must come from the SAME row.
+      Mixing attributes across rows would be the serious failure here.
+
+  G8_safety_data_sheet.pdf:
+    what_makes_it_hard: >-
+      A chemical safety data sheet - genuinely unrelated to procurement documents.
+      A clean negative case with no near-miss features.
+    expect_document_type: unknown
+    expect_file_type: pdf_digital
+    fields: {}
