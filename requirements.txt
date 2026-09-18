@@ -1,0 +1,17 @@
+pydantic>=2.9
+pymupdf>=1.24          # PDF text extraction AND page rasterisation (replaces pypdf + poppler)
+pytesseract>=0.3.13
+pillow>=10.4
+openpyxl>=3.1
+reportlab>=4.2         # authors the synthetic demo PDFs
+pyyaml>=6.0
+python-dotenv>=1.0        # loads .env so the key lives in the project, not the shell profile
+anthropic>=0.40
+langchain-anthropic>=0.3
+langchain-core>=0.3
+llama-index-core>=0.12
+llama-index-vector-stores-chroma>=0.4
+fastembed>=0.4              # used directly via a ~15-line BaseEmbedding adapter;
+                            # llama-index-embeddings-fastembed caps at Python <3.13
+chromadb>=0.5
+pytest>=8.3

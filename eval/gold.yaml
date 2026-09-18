@@ -1,0 +1,76 @@
+# Ground truth, hand-authored alongside the corpus (scripts/build_corpus.py).
+# Locations are recorded at CHUNK granularity, because a chunk is what the system
+# can actually cite: a PDF page, or a contiguous row block in a sheet.
+
+documents:
+
+  invoice_acme_001.pdf:
+    document_type: invoice
+    file_type: pdf_digital
+    access_tag: procurement
+    expect_needs_review: false
+    fields:
+      invoice_number:  {value: "INV-2026-0117",              location: {kind: pdf_page, page: 1}}
+      vendor_name:     {value: "Acme Industrial Supply Co.", location: {kind: pdf_page, page: 1}}
+      invoice_date:    {value: "2026-03-14",                 location: {kind: pdf_page, page: 1}}
+      po_reference:    {value: "PO-2026-0043",               location: {kind: pdf_page, page: 1}}
+      quantity:        {value: 80,                           location: {kind: pdf_page, page: 1}}
+      unit_price:      {value: 156.00,                       location: {kind: pdf_page, page: 1}}
+      total_amount:    {value: 12480.00,                     location: {kind: pdf_page, page: 1}}
+
+  po_acme_001.pdf:
+    document_type: purchase_order
+    file_type: pdf_scanned
+    access_tag: procurement
+    expect_needs_review: false        # the demo copy is the readable L1 rung
+    fields:
+      po_number:        {value: "PO-2026-0043",               location: {kind: pdf_page, page: 1}}
+      vendor_name:      {value: "Acme Industrial Supply Co.", location: {kind: pdf_page, page: 1}}
+      issue_date:       {value: "2026-02-28",                 location: {kind: pdf_page, page: 1}}
+      buyer_entity:     {value: "Northwind Manufacturing LLC",location: {kind: pdf_page, page: 1}}
+      committed_amount: {value: 12000.00,                     location: {kind: pdf_page, page: 1}}
+
+  vendor_records.xlsx:
+    document_type: vendor_record
+    file_type: xlsx
+    access_tag: general
+    expect_needs_review: false
+    fields:
+      vendor_id:               {value: "V-1042",                     location: {kind: xlsx_range, sheet: Vendors, cell_range: "A4:B9"}}
+      vendor_name:             {value: "Acme Industrial Supply Co.", location: {kind: xlsx_range, sheet: Vendors, cell_range: "A4:B9"}}
+      contracted_unit_price:   {value: 150.00,                       location: {kind: xlsx_range, sheet: Vendors, cell_range: "A4:B9"}}
+      contract_effective_date: {value: "2026-01-01",                 location: {kind: xlsx_range, sheet: Vendors, cell_range: "A4:B9"}}
+      payment_terms:           {value: "Net 30",                     location: {kind: xlsx_range, sheet: Vendors, cell_range: "A4:B9"}}
+
+# The degradation ladder shares ONE field set with po_acme_001.pdf - same source
+# content, scan quality is the only variable. Measured Tesseract 5.5.3 behaviour:
+scan_ladder:
+  source_fields_from: po_acme_001.pdf
+  levels:
+    po_acme_001_L1_clean.pdf:
+      observed_ocr_mean: 95.1
+      expect_needs_review: false
+      expect_fields_correct: [po_number, vendor_name, issue_date, buyer_entity, committed_amount]
+    po_acme_001_L2_medium.pdf:
+      observed_ocr_mean: 76.9
+      expect_needs_review: false
+      # the interesting rung: money and identifiers survive, the vendor name does not
+      expect_fields_correct: [po_number, issue_date, committed_amount]
+      expect_fields_corrupted: [vendor_name]
+    po_acme_001_L3_degraded.pdf:
+      observed_ocr_mean: 50.4
+      expect_needs_review: true       # below MIN_OCR_CONFIDENCE=65.0 -> extraction skipped
+      expect_fields_correct: []
+
+# The cross-document question. Requires all three document types, and both a
+# digital and a scanned source.
+cross_document:
+  question: >-
+    Did Acme bill us above their contracted rate on INV-2026-0117, and does the
+    invoice stay within what PO-2026-0043 committed?
+  required_document_types: [invoice, purchase_order, vendor_record]
+  answer_entities: ["156.00", "150.00", "480.00", "12,480.00", "12,000.00"]
+  reasoning:
+    unit_overcharge: 6.00           # 156.00 - 150.00
+    total_overcharge: 480.00        # 80 x 6.00
+    over_po_commitment: 480.00      # 12,480.00 - 12,000.00
