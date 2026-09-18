@@ -102,8 +102,8 @@ def _record(manifest: dict[str, ManifestEntry], document, chunks: list[Chunk]) -
 def ingest_directory(directory: Path, *, force: bool = False) -> list[tuple[Path, IngestOutcome]]:
     manifest = load_manifest()
     results = []
-    for path in sorted(Path(directory).iterdir()):
-        if path.name.startswith(".") or path.is_dir():
+    for path in sorted(Path(directory).rglob("*")):
+        if path.is_dir() or path.name.startswith("."):
             continue
         results.append((path, ingest_document(path, manifest, force=force)))
     save_manifest(manifest)

@@ -282,11 +282,11 @@ def build_vendor_records(path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 def main() -> None:
-    for d in (CORPUS, SCANS, BUILD):
+    for d in (CORPUS / "procurement", CORPUS / "general", SCANS, BUILD):
         d.mkdir(parents=True, exist_ok=True)
 
-    build_invoice(CORPUS / "invoice_acme_001.pdf")
-    print(f"  wrote {CORPUS / 'invoice_acme_001.pdf'}")
+    build_invoice(CORPUS / "procurement" / "invoice_acme_001.pdf")
+    print(f"  wrote {CORPUS / 'procurement' / 'invoice_acme_001.pdf'}")
 
     src = BUILD / "po_source.pdf"
     build_po_source(src)
@@ -298,11 +298,11 @@ def main() -> None:
         print(f"  wrote {out}  ({cfg['dpi']} dpi)")
 
     # the demo copy IS the clean rung of the ladder - same bytes, no third render
-    shutil.copyfile(SCANS / "po_acme_001_L1_clean.pdf", CORPUS / "po_acme_001.pdf")
-    print(f"  wrote {CORPUS / 'po_acme_001.pdf'}  (copy of L1_clean)")
+    shutil.copyfile(SCANS / "po_acme_001_L1_clean.pdf", CORPUS / "procurement" / "po_acme_001.pdf")
+    print(f"  wrote {CORPUS / 'procurement' / 'po_acme_001.pdf'}  (copy of L1_clean)")
 
-    build_vendor_records(CORPUS / "vendor_records.xlsx")
-    print(f"  wrote {CORPUS / 'vendor_records.xlsx'}")
+    build_vendor_records(CORPUS / "general" / "vendor_records.xlsx")
+    print(f"  wrote {CORPUS / 'general' / 'vendor_records.xlsx'}")
 
 
 if __name__ == "__main__":

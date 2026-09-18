@@ -7,9 +7,9 @@ from docint.config import ROOT
 from docint.models import SourceLocation
 from docint.parse import UnsupportedFileType, make_chunk_id, parse
 
-INVOICE = ROOT / "corpus" / "invoice_acme_001.pdf"
-PO = ROOT / "corpus" / "po_acme_001.pdf"
-VENDORS = ROOT / "corpus" / "vendor_records.xlsx"
+INVOICE = ROOT / "corpus" / "procurement" / "invoice_acme_001.pdf"
+PO = ROOT / "corpus" / "procurement" / "po_acme_001.pdf"
+VENDORS = ROOT / "corpus" / "general" / "vendor_records.xlsx"
 
 
 def test_digital_pdf_uses_text_layer_not_ocr():
@@ -64,7 +64,7 @@ def test_chunk_id_ignores_text_so_ocr_drift_cannot_move_it():
 
 
 def test_access_tags_come_from_config_not_the_file():
-    assert parse(VENDORS)[0].access_tag == "general"
+    assert parse(VENDORS)[0].access_tag == "general"   # corpus/general/
     assert parse(PO)[0].access_tag == "procurement"
 
 

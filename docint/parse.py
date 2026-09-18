@@ -216,7 +216,7 @@ def parse(path: Path) -> tuple[Document, list[Chunk]]:
     """Parse one file into a Document and its located Chunks."""
     path = Path(path)
     doc_hash = content_hash(path)
-    access_tag = access_tag_for(path.name)
+    access_tag = access_tag_for(path)
     suffix = path.suffix.lower()
 
     if suffix == ".pdf":

@@ -108,15 +108,18 @@ TYPE_KEYWORDS: dict[str, tuple[str, ...]] = {
 # RBAC at the profile layer, single-attribute ABAC at the resource layer. There is
 # no identity provider - `--as <profile>` stands in for what would be a JWT claim.
 
+# Tags are derived from the DIRECTORY a document sits in, mirroring how folder-level
+# ACLs actually work in a document management system:
+#
+#     corpus/procurement/invoice_acme_001.pdf   -> procurement
+#     corpus/general/vendor_records.xlsx        -> general
+#
+# An earlier version mapped literal filenames to tags. That was demo scaffolding
+# wearing a config's clothes: it could not survive a renamed file, let alone a real
+# corpus. Directory-derived tags are still a stand-in - in production this comes from
+# the DMS, a folder ACL or a sensitivity label - but it is a stand-in for the right
+# thing, and adding a document requires no code change.
 DEFAULT_ACCESS_TAG = "procurement"
-ACCESS_TAG_BY_FILENAME: dict[str, str] = {
-    # Tagged `general` on purpose: it makes the access-denied eval case a real test.
-    # If every document were `procurement`, the auditor would retrieve nothing at all
-    # and the case would pass whether or not filtering actually worked. This way the
-    # auditor CAN see the contracted rate but still cannot reach the invoice, so the
-    # system must refuse on partial evidence rather than on an empty result set.
-    "vendor_records.xlsx": "general",
-}
 
 ACCESS_PROFILES: dict[str, frozenset[str]] = {
     "procurement_analyst": frozenset({"procurement", "general"}),
@@ -124,5 +127,12 @@ ACCESS_PROFILES: dict[str, frozenset[str]] = {
 }
 
 
-def access_tag_for(filename: str) -> str:
-    return ACCESS_TAG_BY_FILENAME.get(filename, DEFAULT_ACCESS_TAG)
+def known_access_tags() -> frozenset[str]:
+    return frozenset().union(*ACCESS_PROFILES.values())
+
+
+def access_tag_for(path) -> str:
+    """Derive a document's access tag from the directory it lives in."""
+    from pathlib import Path
+    parent = Path(path).parent.name
+    return parent if parent in known_access_tags() else DEFAULT_ACCESS_TAG
