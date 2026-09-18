@@ -162,25 +162,25 @@ def build_po_source(path: Path) -> None:
 
 # Degradation ladder. L1 is the readable copy that also ships in corpus/.
 #
-# These numbers are MEASURED, not guessed. Observed Tesseract 5.5.3 output on this
-# page (see eval/ocr_ladder.md):
+# MEASURED THROUGH THE REAL PIPELINE (degrade -> image-only PDF -> parse() -> OCR),
+# not through a probe. This matters: an earlier tuning pass rasterised the *source*
+# PDF at the target DPI and OCR'd that directly, reporting 76.9 for L2. The pipeline
+# instead re-renders the already-degraded image-only PDF back up to 300 DPI, and that
+# upscaling adds interpolation damage the probe never saw - the true figure was 41.3.
+# Always measure the path the system actually takes.
 #
-#   L1  mean conf 95.1 / 63 words  - every ground-truth field correct
-#   L2  mean conf 76.9 / 58 words  - PO number, amount and date correct, but the
-#                                    vendor name is silently garbled. This is the
-#                                    interesting case: partial corruption that does
-#                                    not announce itself.
-#   L3  mean conf 50.4 / 46 words  - vendor name lost, one of the two committed-amount
-#                                    occurrences lost, text heavily garbled.
+#   L1  ocr 95.1  - all five gold fields readable
+#   L2  ocr 62.4  - all five still readable, but below the field-flag threshold,
+#                   so every extracted value is surfaced as LOW-CONFIDENCE
+#   L3  ocr 43.4  - vendor_name and po_number lost; below MIN_OCR_CONFIDENCE,
+#                   so extraction is skipped and the document goes to human review
 #
-# MIN_OCR_CONFIDENCE is therefore set to 65.0 - between L2 and L3, with the demo copy (95.1)
-# far above it. An earlier ladder produced 95 -> 44 -> 0.0, which is a cliff rather
-# than a gradient: Tesseract found nothing at all at the bottom rung, making the
-# most dangerous case (plausible garbage) untestable.
+# Thresholds follow from these observations: MIN_OCR_CONFIDENCE=55 sits between L2
+# and L3; LOW_CONFIDENCE_FIELD=75 sits between L1 and L2.
 LEVELS = {
     "L1_clean":    dict(dpi=300, blur=0.0, noise=0, jpeg=95, rotate=0.0),
-    "L2_medium":   dict(dpi=120, blur=1.0, noise=5, jpeg=30, rotate=0.8),
-    "L3_degraded": dict(dpi=110, blur=1.2, noise=8, jpeg=25, rotate=1.0),
+    "L2_medium":   dict(dpi=200, blur=1.0, noise=4, jpeg=35, rotate=0.6),
+    "L3_degraded": dict(dpi=150, blur=1.2, noise=5, jpeg=30, rotate=0.7),
 }
 
 

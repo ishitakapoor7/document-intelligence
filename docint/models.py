@@ -78,8 +78,8 @@ class ExtractedField(BaseModel):
 
     @property
     def low_confidence(self) -> bool:
-        from docint.config import MIN_OCR_CONFIDENCE
-        return self.ocr_confidence is not None and self.ocr_confidence < MIN_OCR_CONFIDENCE
+        from docint.config import LOW_CONFIDENCE_FIELD
+        return self.ocr_confidence is not None and self.ocr_confidence < LOW_CONFIDENCE_FIELD
 
 
 class Document(BaseModel):
@@ -115,3 +115,16 @@ class ManifestEntry(BaseModel):
     document_type: DocumentType
     chunk_ids: list[str]
     ingested_at: datetime
+
+
+class IngestOutcome(BaseModel):
+    """What happened to one file. `unchanged` is what makes idempotence visible."""
+
+    status: Literal["ingested", "unchanged", "needs_review", "unknown_type", "unsupported"]
+    document: Document | None = None
+    chunks: list[Chunk] = Field(default_factory=list)
+    detail: str | None = None
+
+    @property
+    def did_work(self) -> bool:
+        return self.status != "unchanged"

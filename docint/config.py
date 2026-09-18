@@ -29,16 +29,16 @@ MODEL_ANSWER = "claude-opus-5"
 # Thresholds
 # --------------------------------------------------------------------------- #
 
-# Below this mean Tesseract word confidence, a document is routed to human review
-# instead of being extracted from silently.
+# Two OCR thresholds, both MEASURED through the real pipeline (eval/ocr_ladder.md).
+# The same purchase order at three scan qualities gives 95.1 / 62.4 / 43.4.
 #
-# MEASURED, not chosen up front (see eval/ocr_ladder.md). On the same purchase
-# order at three scan qualities Tesseract 5.5.3 returns:
-#     L1 clean     95.1  - all five gold fields readable
-#     L2 medium    76.9  - amount/date/number correct, vendor_name silently garbled
-#     L3 degraded  50.4  - heavy corruption
-# 65.0 sits between the bottom two observations; the demo copy (95.1) is far clear.
-MIN_OCR_CONFIDENCE = 65.0
+# Below this, a document is routed to human review instead of extracted from: the
+# text is too poor to assert values off. Sits between the L2 and L3 observations.
+MIN_OCR_CONFIDENCE = 55.0
+
+# Above the review threshold but below this, values ARE extracted but every field
+# is surfaced as low-confidence rather than asserted flatly. Sits between L1 and L2.
+LOW_CONFIDENCE_FIELD = 75.0
 
 # Below this self-reported classification confidence, a document becomes `unknown`
 # rather than being forced into a label it does not fit.

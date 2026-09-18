@@ -43,24 +43,38 @@ documents:
       payment_terms:           {value: "Net 30",                     location: {kind: xlsx_range, sheet: Vendors, cell_range: "A4:B9"}}
 
 # The degradation ladder shares ONE field set with po_acme_001.pdf - same source
-# content, scan quality is the only variable. Measured Tesseract 5.5.3 behaviour:
+# content, scan quality is the only variable. Confidences below are MEASURED through
+# the real ingest pipeline (see eval/ocr_ladder.md), not through a standalone probe.
 scan_ladder:
   source_fields_from: po_acme_001.pdf
   levels:
     po_acme_001_L1_clean.pdf:
       observed_ocr_mean: 95.1
-      expect_needs_review: false
+      expect_status: ingested
       expect_fields_correct: [po_number, vendor_name, issue_date, buyer_entity, committed_amount]
+      expect_fields_flagged_low_confidence: []
     po_acme_001_L2_medium.pdf:
-      observed_ocr_mean: 76.9
-      expect_needs_review: false
-      # the interesting rung: money and identifiers survive, the vendor name does not
-      expect_fields_correct: [po_number, issue_date, committed_amount]
-      expect_fields_corrupted: [vendor_name]
+      observed_ocr_mean: 62.4
+      expect_status: ingested
+      # Above MIN_OCR_CONFIDENCE (55) so values are extracted, but below
+      # LOW_CONFIDENCE_FIELD (75) so every one is surfaced as low-confidence
+      # rather than asserted flatly.
+      expect_fields_correct: [po_number, vendor_name, issue_date, buyer_entity, committed_amount]
+      expect_fields_flagged_low_confidence: [po_number, vendor_name, issue_date, buyer_entity, committed_amount]
     po_acme_001_L3_degraded.pdf:
-      observed_ocr_mean: 50.4
-      expect_needs_review: true       # below MIN_OCR_CONFIDENCE=65.0 -> extraction skipped
+      observed_ocr_mean: 43.4
+      expect_status: needs_review     # below MIN_OCR_CONFIDENCE -> extraction skipped
+      expect_document_type: purchase_order   # classification survives poor OCR
       expect_fields_correct: []
+      expect_fields_flagged_low_confidence: []
+
+# FINDING, recorded rather than engineered around: on this corpus Tesseract's
+# confidence tracks correctness. There is no observed band where confidence is high
+# and a value is silently wrong - by the time values corrupt, confidence has already
+# fallen below the review threshold. An earlier version of this file asserted a
+# corrupted vendor_name at L2; that came from a probe measuring a path the pipeline
+# never takes, and it did not reproduce. The honest result is that the confidence
+# signal was informative here, on one page of one document.
 
 # The cross-document question. Requires all three document types, and both a
 # digital and a scanned source.
