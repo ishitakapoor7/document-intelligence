@@ -179,7 +179,28 @@ def extract(document: Document, chunks: list[Chunk]):
         f"Extract the requested fields from this {document.document_type.replace('_', ' ')}. "
         "For each scalar field give the value, a verbatim evidence_quote containing it, and "
         "the chunk_id you read it from. Use null for any field genuinely absent - do NOT "
-        "infer, derive or invent a value that is not printed on the document. "
+        "infer, derive or invent a value that is not printed on the document.\n\n"
+        # The gap this closes: "do not invent" does not cover choosing. On a sheet
+        # listing three suppliers, one supplier's rate IS printed on the document, so
+        # returning it breaks no rule above - and the consumer cannot tell the other
+        # two exist. Observed picking row 1 on all 5 of 5 runs, having been recorded
+        # months earlier as declining to pick; nothing in this prompt ever asked it to
+        # decline, so that earlier behaviour was the model's, not the system's.
+        "These scalar fields describe ONE record. If this file contains SEVERAL "
+        "separate records of the SAME type - several suppliers listed on one sheet, "
+        "several invoices bundled together - then a scalar has no single correct "
+        "value: return null for every scalar that differs between those records "
+        "instead of choosing one. Choosing one is not a partial answer, it is a wrong "
+        "answer, because nothing downstream can tell that the others exist. Documents "
+        "of OTHER types in the same file are not competing records; ignore them.\n"
+        # Needed because the blunter version declined on a 7-page accounts-payable
+        # packet that contains exactly ONE invoice alongside cheques and payment
+        # requests - it counted money-bearing paperwork rather than instances of the
+        # type being extracted, and refused a document it could read perfectly.
+        "Count only records that would themselves be classified as "
+        f"a {document.document_type.replace('_', ' ')}. If exactly ONE such record is "
+        "present, extract it normally, even when the file also holds other kinds of "
+        "paperwork carrying their own amounts, dates and reference numbers.\n\n"
         "List EVERY billed or ordered line in line_items; do not summarise or truncate. "
         "Dates must be ISO YYYY-MM-DD. Currency and numeric values must be plain numbers "
         "with no symbols or thousands separators.\n\n"

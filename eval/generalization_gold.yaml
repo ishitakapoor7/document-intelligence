@@ -121,12 +121,19 @@ documents:
     expect_document_type: vendor_record
     expect_file_type: xlsx
     expect_status: needs_review_missing_fields
-    # UPDATED after observing the behaviour. An earlier version of this gold accepted
-    # "any one of the three suppliers" as a pass. That was wrong. Returning one
-    # arbitrary row from a three-row sheet is not a correct answer - a consumer would
-    # believe the workbook describes a single supplier at that rate. The right outcome
-    # is what the pipeline now does: decline to pick, leave the required fields empty,
-    # and route to human review with the classification preserved.
+    # An earlier version of this gold accepted "any one of the three suppliers" as a
+    # pass. That was wrong: returning one arbitrary row is not a correct answer,
+    # because a consumer would believe the workbook describes a single supplier at
+    # that rate. The required outcome is to decline to pick, leave the required fields
+    # empty, and route to human review with the classification preserved.
+    #
+    # CORRECTION. This comment used to read "the right outcome is what the pipeline
+    # now does", citing the behaviour as evidence that the design was right. It was
+    # not: nothing in the extraction prompt asked the model to decline, and a later
+    # run picked row 1 on 5 of 5 attempts - three invented values at status=extracted,
+    # with no flag. An observation had been promoted to a design claim. The prompt now
+    # states the multi-instance policy explicitly (docint/understand.py), and declining
+    # is measured at 5/5 rather than assumed.
     fields:
       vendor_id:               {must_be_null: "three candidate suppliers; picking one arbitrarily is fabrication"}
       vendor_name:             {must_be_null: "three candidate suppliers"}

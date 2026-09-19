@@ -77,21 +77,30 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
     document.document_type, document.classification_confidence = classify(chunks)
     chunks = finalize_chunks(chunks, document)
 
-    if document.document_type == "unknown":
-        document.status = "unknown_type"
-        document.review_reason = (
-            f"classification confidence {document.classification_confidence:.2f} below "
-            f"threshold, or no configured type fits; no schema to extract against")
-        return _finish(manifest, document, chunks, started, index)
-
     # 5. Quality gate, applied to the EFFECTIVE confidence - i.e. after any fallback.
+    #    Checked BEFORE the `unknown` short-circuit, because "we could not identify
+    #    this document" is a conclusion drawn FROM the text, and it is not available
+    #    when the text itself is unreadable. lmcj0190.pdf reads at 54.0 even after
+    #    vision and was reported `unknown_type` - true, but it sent a reviewer looking
+    #    for a missing document type when the actionable fact was that the scan is
+    #    barely legible. The classification is still recorded on the document either
+    #    way; only the status changes, and it now names the earlier cause.
     effective = document.ocr_mean_confidence
     if effective is not None and effective < MIN_OCR_CONFIDENCE:
         document.status = "needs_review_ocr"
         document.review_reason = (
             f"recognition confidence {effective:.1f} is below the {MIN_OCR_CONFIDENCE:.0f} "
             f"threshold" + (" even after vision fallback" if document.ocr.fallback_used else "")
-            + "; extraction skipped rather than asserting values read from text we cannot trust.")
+            + "; extraction skipped rather than asserting values read from text we cannot trust."
+            + (f" Classified `{document.document_type}`, which is itself unreliable at this "
+               f"confidence." if document.document_type == "unknown" else ""))
+        return _finish(manifest, document, chunks, started, index)
+
+    if document.document_type == "unknown":
+        document.status = "unknown_type"
+        document.review_reason = (
+            f"classification confidence {document.classification_confidence:.2f} below "
+            f"threshold, or no configured type fits; no schema to extract against")
         return _finish(manifest, document, chunks, started, index)
 
     # 6. Extract.

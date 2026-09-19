@@ -207,33 +207,112 @@ instead to the six qty-50 assay rows above it, which it does not belong to.
 
 ---
 
+## 6. A behaviour I had credited to the design turned out to belong to the model
+
+Completing the holdout run re-ran the synthetic set, and `G7` — a sheet listing three
+suppliers against a one-supplier schema — came back with **three invented values** at
+`status=extracted`: vendor_id `SUP-0098`, vendor_name `Harlow Components GmbH`, rate
+`124.00`. It had previously returned nulls, and that result is committed in
+`eval/ingest_eval_output.txt`.
+
+`docint/understand.py` had not changed between those runs. Measured 5 times: it picked
+row 1 on **5 of 5**.
+
+The uncomfortable part is what `generalization_gold.yaml` said about the old
+behaviour, in my own words:
+
+> "The right outcome is what the pipeline now does: decline to pick, leave the
+> required fields empty, and route to human review."
+
+Nothing in the extraction prompt ever asked the model to decline. I observed a
+behaviour once and wrote it into gold as though it were a property of the system.
+It was a property of the model on that day, and when it changed, the failure was
+exactly the one this project exists to prevent: three fabricated values, asserted,
+unflagged.
+
+The prompt now states the policy — several records *of the type being extracted*
+means no scalar has a single correct value, so return null rather than choosing —
+and the gold comment has been corrected to say so. Declining is now **8/8 measured**
+rather than assumed.
+
+### The same policy, written bluntly, refused a document it could read
+
+The first wording counted money-bearing paperwork rather than instances of the type
+being extracted, and `lnml0028` — a packet containing exactly one invoice among
+cheques and payment requests — went from extracting that invoice correctly to
+returning nothing, 3/3. Sharpened to "count only records that would themselves be
+classified as an invoice; if exactly one is present, extract it", both separate
+cleanly at 3/3: G7 declines, `lnml0028` returns $4,667.00 out of a file containing
+four different amounts.
+
+### The methodological lesson, which I learned three times today
+
+I validated that first wording with **one run** of each regression document, saw
+`lnml0028` extract correctly, and moved on. The next full run showed it declining
+3/3. That is the third time in this project a conclusion rested on a single sample:
+the verifier appeared to catch a planted claim (it caught it 3/10), G7 appeared to
+decline by design (it was one sample), and this. The eval harness exists precisely
+because single observations of a non-deterministic system are not evidence, and I
+kept spending them anyway when I was in a hurry.
+
+**Still unstable, and reported as such:** `G4` — the purchase order whose printed
+EUR 18,750.00 is overwritten by a handwritten 19,400.00 — declined 3/3 during the
+probe above and asserted **19,400.00** in the final run. It flips. The right fix is
+an amendment policy in the prompt (an uncountersigned handwritten change is not an
+authority), which remains specified and unimplemented; what is *not* true is that
+anything done today fixed it.
+
+---
+
+## 7. The review floor was finally earned by a real document
+
+`lmcj0190.pdf` reads at **47.0** under Tesseract, escalates to vision, and comes back
+at **51.7** — still below `MIN_OCR_CONFIDENCE`. It is now `needs_review_ocr`: a
+document the system tried twice to read, could not, and says so.
+
+Every previous exercise of that floor was a PDF this project degraded on purpose. It
+is the first time the bottom rung has been reached by a document that simply is that
+bad, and the answer — vision fallback fires, fails to clear the bar, and the system
+stops — is the ladder behaving exactly as designed.
+
+Reaching it required one more fix. The status was previously `unknown_type`, because
+the `unknown` short-circuit ran before the quality gate: true, but it sent a reviewer
+looking for a missing document type when the actionable fact was that the scan is
+barely legible. "We cannot identify this document" is a conclusion drawn *from* the
+text and is not available when the text cannot be read, so the gate now runs first
+and names the earlier cause.
+
+---
+
 ## Scoreboard
 
-Complete, **before** the parse fix:
+Final, complete, after every change described above:
 
 | | classification | scalars | line items | completeness | hallucinations |
 |---|---|---|---|---|---|
 | Controlled (3 docs) | 3/3 | 15/15 | 4/4 | 3/3 | 0 |
 | Synthetic adversarial (8 docs) | 8/8 | 22/23 | 15/15 | 7/8 | 0 |
-| **External holdout (3 docs)** | **3/3** | **12/13** | **0/1** | **1/3** | **0** |
+| **External holdout (3 docs)** | **3/3** | **9/13** | **0/1** | **1/3** | **0** |
 
-Classification held up on genuinely foreign documents, including a correct `unknown`
-on a freight-bill packet designed by nobody to fool anything, and no field was ever
-invented. Document completeness — the honest number — is 1 in 3.
+Per holdout:
 
-**Incomplete, after the parse fix.** The run stopped partway through: the Anthropic
-account ran out of credit during `lmcj0190`'s vision escalation. What is measured:
+| document | type | status | outcome |
+|---|---|---|---|
+| `gkdb0226` invoice | invoice ✓ | `needs_review_missing_fields` | total correct; invoice number and date lost to OCR; vendor read "Marista"; PO field took a Bates number |
+| `lmcj0190` freight/returns packet | unknown ✓ | `needs_review_ocr` | all fields null ✓ — tried twice to read it, could not, said so |
+| `lnml0028` AP packet | invoice (accepted) | `needs_review_missing_fields` | vendor, date and $4,667.00 correct out of four competing amounts; no invoice number exists, correctly flagged |
 
-- `gkdb0226` full result, in the table above
-- recognition for all three (no model calls needed): `pdf_scanned` for all, at 90.1,
-  47.0 and 80.0
-- the eleven earlier documents, re-run with no regression
+**Classification: 3/3 on documents from a different author, a different decade and a
+different industry**, including a correct `unknown` on a freight-bill packet and a
+correct `invoice` on a 2005 lab invoice — the fresh validation the tightened invoice
+taxonomy needed. **No value was invented in any of the three.**
 
-What is **not** measured: classification and extraction for `lmcj0190` and `lnml0028`
-after the fix. `lmcj0190` at mean 47.0 should now escalate to vision and then, if that
-does not lift it above 55.0, land in `needs_review_ocr` — that would be the first time
-the review floor has been exercised by a document that genuinely deserves it rather
-than by a synthetically degraded one. Untested. Rerun with `make eval-ingest`.
+Scalar accuracy on the holdouts fell from 12/13 to 9/13 across the day's changes,
+while every remaining error moved from *silent* to *flagged*. That is the trade this
+system is supposed to make, and it is a trade: a document-intelligence layer that
+declines too readily is safe and useless. On this evidence it is not yet too cautious
+— `lnml0028` proves it still reads a hard document correctly — but three documents
+cannot settle where the line sits.
 
 ---
 
@@ -242,11 +321,13 @@ than by a synthetically degraded one. Untested. Rerun with `make eval-ingest`.
 **Can:** that a design decision every one of eleven synthetic documents agreed with was
 wrong, and wrong in the direction that silently produces confident false values — the
 exact failure this project claims to prevent. One real document found it in one run.
+It also found a multi-record hallucination, a status that hid its own root cause, and
+a confidence score of 90.1 on a misread page.
 
 **Cannot:** anything with a rate attached. Three documents, one domain, one archive,
-one era of scanning technology. The scoreboard rows above are counts.
+one era of scanning technology. Every row above is a count.
 
 The lesson is not about tobacco-industry paperwork. It is that a corpus authored by
-the same person as the schemas will agree with the schemas' assumptions, including the
-assumptions nobody wrote down — and that the cheapest, highest-yield thing available to
-this project was three documents somebody else picked.
+the same person as the schemas will agree with the schemas' assumptions, including
+the assumptions nobody wrote down — and that the cheapest, highest-yield thing
+available to this project was three documents somebody else picked.
