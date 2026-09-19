@@ -18,6 +18,7 @@ from docint.ingest import ingest_document
 
 GOLD_CONTROLLED = ROOT / "eval" / "gold.yaml"
 GOLD_GENERAL = ROOT / "eval" / "generalization_gold.yaml"
+GOLD_HOLDOUT = ROOT / "eval" / "holdout_gold.yaml"
 
 
 def norm(v) -> str:
@@ -67,8 +68,18 @@ def evaluate(gold_path: Path, doc_dir: Path, label: str) -> tuple[Tally, list[st
         doc = outcome.document
         got = {f.name: f for f in (doc.fields if doc else [])}
 
-        exp_type = expected.get("expect_document_type") or expected.get("document_type")
-        type_ok = doc is not None and doc.document_type == exp_type
+        # A document the taxonomy genuinely cannot label - a packet holding several
+        # unrelated records - has more than one defensible answer, and picking one
+        # arbitrarily would score a reasonable reading as a failure. Where gold says
+        # so, any listed label passes and the document-level verdict is carried by
+        # the schema-mismatch row instead.
+        any_types = expected.get("expect_document_type_any_of")
+        if any_types:
+            exp_type = " | ".join(any_types)
+            type_ok = doc is not None and doc.document_type in any_types
+        else:
+            exp_type = expected.get("expect_document_type") or expected.get("document_type")
+            type_ok = doc is not None and doc.document_type == exp_type
         tally.add(name, "__type__", "pass" if type_ok else "fail",
                   f"got {doc.document_type if doc else 'n/a'}, expected {exp_type}")
 
@@ -222,8 +233,10 @@ def degraded_table(paths: list[Path]) -> None:
 if __name__ == "__main__":
     t1, _ = evaluate(GOLD_CONTROLLED, ROOT / "corpus", "CONTROLLED FIXTURES (written alongside the schemas)")
     t2, _ = evaluate(GOLD_GENERAL, ROOT / "eval" / "generalization", "SYNTHETIC ADVERSARIAL SET (written independently of the schemas, same author)")
+    t3, _ = evaluate(GOLD_HOLDOUT, ROOT / "eval" / "holdouts", "EXTERNAL HOLDOUTS (real documents, different author, gold written before the run)")
     summarise(t1, "CONTROLLED")
     summarise(t2, "SYNTHETIC ADVERSARIAL")
+    summarise(t3, "EXTERNAL HOLDOUT")
     degraded_table([
         ROOT / "eval" / "scans" / "po_acme_001_L1_clean.pdf",
         ROOT / "eval" / "scans" / "po_acme_001_L2_medium.pdf",

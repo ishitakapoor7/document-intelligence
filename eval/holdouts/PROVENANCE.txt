@@ -1,11 +1,30 @@
 # Externally-authored holdout documents.
 #
-# One line per file:
-#   <filename> | <exact source URL> | retrieved <date> | <license> | expected: <type>
+# Every other document in this evaluation was written by the same person who wrote
+# the pipeline and the schemas. These three were not: they are real business records
+# from the 1990s and 2000s, published in the UCSF Industry Documents Library, chosen
+# and downloaded by someone other than the pipeline's author, and read by hand before
+# the pipeline was ever pointed at them.
 #
-# Requirements: public domain or a license permitting redistribution; business
-# documents only, no personal data. See eval/generalization_findings.md for why
-# these matter - every other document in this evaluation was authored by the
-# same person who wrote the pipeline.
+# <filename> | <source URL> | retrieved | license | expected type (hand-assigned)
+
+gkdb0226.pdf | https://www.industrydocuments.ucsf.edu/docs/gkdb0226 | 2026-09-18 | UCSF Industry Documents Library, public archive of documents produced in litigation and released to the public | invoice
+lmcj0190.pdf | https://www.industrydocuments.ucsf.edu/docs/lmcj0190 | 2026-09-18 | as above | none of the configured types (returned-goods form + freight bill)
+lnml0028.pdf | https://www.industrydocuments.ucsf.edu/docs/lnml0028 | 2026-09-18 | as above | multi-document accounts-payable packet containing one genuine invoice
+
+sha256:
+  55b0a06c684a84b72c9de487aa731546bd0304148d41f855e9d1c21a72c87a1d  gkdb0226.pdf
+  23c1fe819de1807022c5f5da281ce59d79faad2eed067dc940dfa69a685a09a9  lmcj0190.pdf
+  6a7de51fdae53fc418916bc58f973ba64e0a4ca818755a20cd4735b60f9b0cbb  lnml0028.pdf
+
+# Note on personal data: these are published corporate records and they carry the
+# names of employees and officers as printed on the originals (buyers, signatories,
+# correspondents). They are business-to-business documents in a public archive, not
+# private personal records, and nothing here was added, linked or enriched. The
+# stated requirement for this set was "no personal data"; the accurate statement is
+# "no private personal data" - business contacts appear, as published.
 #
-# (empty - awaiting documents)
+# Note on the text layer: all three carry an OCR text layer produced by the archive,
+# not by this pipeline. Its quality is poor and in one case wrong (it reads the
+# vendor "Arista Laboratories" as "Uristo"). See eval/holdout_findings.md - this
+# turns out to matter more than anything else about these files.

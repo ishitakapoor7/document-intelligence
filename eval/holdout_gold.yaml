@@ -1,0 +1,87 @@
+# Ground truth for the external holdouts, hand-written by reading the documents
+# themselves - the rendered pages, not the text layer and not any pipeline output.
+#
+# Authored BEFORE the pipeline was run against them. That ordering is the entire
+# value of this file: gold written after seeing predictions is a record of what the
+# system did, not of what is true.
+#
+# Where the configured schema cannot represent the document, this file says so
+# rather than inventing an expectation the document does not support.
+
+documents:
+
+  # ------------------------------------------------------------------------- #
+  gkdb0226.pdf:
+    # Arista Laboratories -> Philip Morris USA, analytical testing services.
+    # One page, one document, unambiguous. This is the fresh holdout for the
+    # invoice-classification tightening: nothing about it was seen during that fix.
+    document_type: invoice
+    fields:
+      invoice_number: {value: "1179"}
+      # The letterhead reads "Arista Laboratories". The archive's own OCR text layer
+      # reads "Uristo" - a wrong vendor name sitting in the text the pipeline will
+      # consume. Gold records what the PAGE says.
+      vendor_name:    {value: "Arista Laboratories"}
+      invoice_date:   {value: "2005-01-31"}
+      # Genuinely ambiguous on the page, and the ambiguity is the test. The printed
+      # P.O. 8500005968 is struck through; a handwritten 850001215 below it is also
+      # struck through; 85000 14180 is handwritten above the table. Declining (null)
+      # and reading the surviving handwritten value are both defensible. Returning a
+      # struck-through number as the live PO reference is not.
+      po_reference:   {any_of: [null, "85000014180"]}
+      total_amount:   {value: 133337.50}
+    line_items:
+      # 6 assays at qty 20, the same 6 at qty 50, the MASS surcharge, and the report.
+      # Subtotal rows and the bare condition line are not line items.
+      count: 14
+    notes: >-
+      Handwritten throughout: "OK to pay" with a signature and date, a resubmission
+      note to Accounts Payable, quarter/project annotations, and a circled rate.
+
+  # ------------------------------------------------------------------------- #
+  lmcj0190.pdf:
+    # Three pages, none of them a configured type: a scrawled cover sheet, an RJR
+    # RETURNED GOODS AUTHORIZATION FORM, and an Overnite Transportation freight
+    # bill. The freight bill is the trap - it carries "TOTAL CHARGES (USD)" and a
+    # money column, so it reads like an invoice to anything matching on surface cues.
+    expect_document_type: unknown
+    fields:
+      invoice_number: {must_be_null: true}
+      vendor_name:    {must_be_null: true}
+      invoice_date:   {must_be_null: true}
+      total_amount:   {must_be_null: true}
+    notes: >-
+      Correct behaviour is `unknown`, extraction skipped. Any confident type here is
+      a false positive, and any extracted field is an invented value.
+
+  # ------------------------------------------------------------------------- #
+  lnml0028.pdf:
+    # A 7-page accounts-payable packet holding THREE unrelated payment matters:
+    #   p1  check request, $4,667.00, to Cigar Association of America
+    #   p2  covering letter
+    #   p3  a genuine INVOICE from CAA, 1996-05-29, $4,667 (of a $14,000 event)
+    #   p4  a different check request, $1,000.00, to Food Industry Assoc. Executives
+    #   p5  the solicitation letter behind that one
+    #   p6  check stub, $1,000.00, cheque 023001
+    #   p7  check stub, $657.75, cheque 023774, to a third party entirely
+    #
+    # Neither `invoice` nor `unknown` is right, because the taxonomy has no way to
+    # say "bundle". Both are scored as defensible; the document-level verdict is the
+    # schema mismatch below, which is the real finding.
+    expect_document_type_any_of: [invoice, unknown]
+    multi_record_schema_mismatch: >-
+      one file, three unrelated payment matters and one genuine invoice; the schema
+      holds a single record and the document_id addresses the whole PDF
+    fields:
+      # The p3 invoice carries NO invoice number. It is a required field, so the
+      # correct status is needs_review_missing_fields - reading it as absent is
+      # right, inventing one is a hallucination.
+      invoice_number: {must_be_null: true}
+      vendor_name:    {value: "Cigar Association of America, Inc."}
+      invoice_date:   {value: "1996-05-29"}
+      # $4,667 is the amount invoiced. $14,000 is the event cost, $1,000 and $657.75
+      # belong to other matters in the same file.
+      total_amount:   {value: 4667.00}
+    notes: >-
+      Predicted failure: a total drawn from the wrong page. The packet contains
+      4667.00, 14000, 1000.00 and 657.75, and only the first is this invoice's total.
