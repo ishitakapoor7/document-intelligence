@@ -1,14 +1,16 @@
 PY := .venv/bin/python
 
-.PHONY: help doctor ingest review demo eval eval-ingest eval-ingest-save probe test clean-index
+.PHONY: help doctor ingest ask review demo eval eval-ingest eval-ingest-save probe test clean-index
 
 help:
 	@echo "  make doctor       check the environment before anything else"
 	@echo "  make ingest       parse, classify and extract corpus/"
+	@echo "  make ask Q=\"...\"  answer a question  [PROFILE=procurement_analyst|external_auditor]"
 	@echo "  make review       list documents waiting on a human"
 	@echo "  make demo         the 2-minute walkthrough"
 	@echo "  make eval         query-path eval, 7 cases  -> runs/report.md   (~3 min, ~\$$0.50)"
-	@echo "  make eval-ingest  ingestion eval, 14 documents across 3 sets    (~8 min, ~\$$1.50)"
+	@echo "  make eval-ingest  ingestion eval, 14 documents across 3 sets    (~7 min, ~\$$1.20)"
+	@echo "                    scope it: --sets holdouts --only gkdb        (~20s,  ~\$$0.15)"
 	@echo "  make probe        verifier probe, 10 runs per claim             (~2 min, ~\$$0.05)"
 	@echo "  make test         unit tests                                    (offline, free)"
 	@echo ""
@@ -19,6 +21,16 @@ doctor:
 
 ingest:
 	@$(PY) -m docint.cli ingest corpus/
+
+# make ask Q="did Acme bill above contract?" PROFILE=external_auditor
+#
+# PROFILE, not AS: `AS` is a built-in make variable (the assembler, default "as"),
+# so `AS ?= procurement_analyst` is silently ignored and the command runs as
+# `--as as`. It fails loudly at argparse, but only after you have typed a question.
+Q ?= Did Acme bill us above their contracted rate on INV-2026-0117, and does the invoice stay within what PO-2026-0043 committed?
+PROFILE ?= procurement_analyst
+ask:
+	@$(PY) -m docint.cli ask "$(Q)" --as $(PROFILE)
 
 demo:
 	@$(PY) scripts/demo.py
