@@ -139,6 +139,13 @@ class Document(BaseModel):
     missing_required_fields: list[str] = Field(default_factory=list)
     review_reason: str | None = None
 
+    # Which rung of the ladder sent this page to vision. "low_confidence" means the
+    # page looked bad; "missing_fields" means it read clean and still did not yield
+    # what the schema required - a distinction worth keeping, because the second case
+    # is the one a confidence score cannot detect.
+    escalated_on: Literal["low_confidence", "missing_fields"] | None = None
+    missing_before_escalation: list[str] = Field(default_factory=list)
+
     ocr: OcrTelemetry = Field(default_factory=OcrTelemetry)
     extraction_cost_usd: float = 0.0
     total_latency_s: float = 0.0

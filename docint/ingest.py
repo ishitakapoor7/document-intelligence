@@ -72,13 +72,8 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
     tess = document.ocr.tesseract_confidence
     if (vision_fallback and tess is not None and path.suffix.lower() == ".pdf"
             and (force_vision or tess < MIN_OCR_FOR_VISION_FALLBACK)):
-        from docint.vision_ocr import escalate
-        chunks, legibility, cost, latency = escalate(path, chunks)
-        document.ocr.fallback_used = True
-        document.ocr.fallback_route = "claude"
-        document.ocr.post_fallback_confidence = legibility
-        document.ocr.fallback_cost_usd = cost
-        document.ocr.fallback_latency_s = latency
+        document.escalated_on = "low_confidence"
+        chunks = _escalate(path, chunks, document)
 
     # 4. Classify. Runs before the quality gate; an unclear document becomes `unknown`
     #    rather than being forced into a label.
@@ -113,21 +108,91 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
 
     # 6. Extract.
     document.fields, document.line_items, document.extraction_cost_usd = extract(document, chunks)
+    missing = _missing_required(document)
+
+    # 6b. Second rung: escalate on a FIELD DEFICIT, not just on low confidence.
+    #
+    #     A missing required field is direct evidence that recognition failed to
+    #     deliver what the schema needs. A confidence score is only a proxy for
+    #     that, and a poor one: it averages the words Tesseract FOUND and is
+    #     completely silent about the ones it dropped. gkdb0226.pdf reads at 90.1 -
+    #     comfortably above the confidence gate - having lost the invoice number,
+    #     the date and the entire P.O. Number field. Nothing about 90.1 could have
+    #     revealed that; "the schema asked for five values and recognition produced
+    #     three" says it outright.
+    #
+    #     So the ladder now has two independent triggers and one floor:
+    #
+    #        poor confidence  -> vision            (the page looks bad)
+    #        missing fields   -> vision, re-extract (the page read clean and still
+    #                                                did not yield what we need)
+    #        still missing    -> human review
+    #
+    #     Only fires once, only for a scan, and only when something is actually
+    #     absent - so the cost lands exactly on the documents that failed. The
+    #     document type is NOT re-derived: classification survives poor recognition
+    #     well (3/3 on the holdouts before any escalation), and re-running it would
+    #     spend a call to re-answer a question already answered.
+    if (missing and vision_fallback and not document.ocr.fallback_used
+            and document.file_type == "pdf_scanned" and path.suffix.lower() == ".pdf"):
+        document.escalated_on = "missing_fields"
+        document.missing_before_escalation = missing
+        chunks = _escalate(path, chunks, document)
+        chunks = finalize_chunks(chunks, document)
+        fields, line_items, cost = extract(document, chunks)
+        document.fields, document.line_items = fields, line_items
+        document.extraction_cost_usd += cost
+        missing = _missing_required(document)
+
+        # The better transcription can also reveal that the page was worse than
+        # Tesseract claimed. Re-apply the floor rather than asserting values off it.
+        effective = document.ocr_mean_confidence
+        if effective is not None and effective < MIN_OCR_CONFIDENCE:
+            document.status = "needs_review_ocr"
+            document.review_reason = (
+                f"required field(s) {', '.join(document.missing_before_escalation)} were "
+                f"missing, so the page was re-read with vision; legibility came back "
+                f"{effective:.1f}, below the {MIN_OCR_CONFIDENCE:.0f} threshold.")
+            return _finish(manifest, document, chunks, started, index)
 
     # 7. A required field we could not read is a review item, NOT a silent gap - and
     #    the classification is preserved so the reviewer knows what they are looking at.
-    present = {f.name for f in document.fields if f.value is not None}
-    missing = [n for n in required_fields(document.document_type) if n not in present]
     if missing:
         document.missing_required_fields = missing
         document.status = "needs_review_missing_fields"
+        tried_vision = (" even after re-reading the page with vision"
+                        if document.escalated_on == "missing_fields" else "")
         document.review_reason = (
             f"required field(s) {', '.join(missing)} could not be read from this "
-            f"{document.document_type.replace('_', ' ')}; the document is typed but incomplete.")
+            f"{document.document_type.replace('_', ' ')}{tried_vision}; the document is "
+            f"typed but incomplete.")
     else:
         document.status = "extracted"
 
     return _finish(manifest, document, chunks, started, index)
+
+
+def _missing_required(document: Document) -> list[str]:
+    present = {f.name for f in document.fields if f.value is not None}
+    return [n for n in required_fields(document.document_type) if n not in present]
+
+
+def _escalate(path: Path, chunks: list[Chunk], document: Document) -> list[Chunk]:
+    """Re-read the page with Claude vision and record what that cost.
+
+    One function because the ladder now reaches it from two rungs - poor confidence
+    before classification, and a field deficit after extraction - and the telemetry
+    must be recorded identically either way.
+    """
+    from docint.vision_ocr import escalate
+
+    chunks, legibility, cost, latency = escalate(path, chunks)
+    document.ocr.fallback_used = True
+    document.ocr.fallback_route = "claude"
+    document.ocr.post_fallback_confidence = legibility
+    document.ocr.fallback_cost_usd = cost
+    document.ocr.fallback_latency_s = latency
+    return chunks
 
 
 def _finish(manifest, document: Document, chunks: list[Chunk], started: float,

@@ -52,19 +52,30 @@ class Tally:
         return sum(1 for r in self.rows if r[2] == verdict)
 
 
-def evaluate(gold_path: Path, doc_dir: Path, label: str) -> tuple[Tally, list[str]]:
+# What this run has cost so far. Printed at the end, because a number you only
+# discover on the invoice is not a number anybody can act on.
+SPEND: list[float] = []
+
+
+def evaluate(gold_path: Path, doc_dir: Path, label: str,
+             only: str | None = None) -> tuple[Tally, list[str]]:
     gold = yaml.safe_load(gold_path.read_text())["documents"]
     tally, notes = Tally(), []
 
     print(f"\n{'=' * 78}\n{label}\n{'=' * 78}")
 
     for name, expected in gold.items():
+        if only and only.lower() not in name.lower():
+            continue
         path = next(doc_dir.rglob(name), None)
         if path is None:
             notes.append(f"{name}: FILE MISSING")
             continue
 
         outcome = ingest_document(path, {})
+        if outcome.document is not None:
+            SPEND.append(outcome.document.extraction_cost_usd
+                         + outcome.document.ocr.fallback_cost_usd)
         doc = outcome.document
         got = {f.name: f for f in (doc.fields if doc else [])}
 
@@ -234,18 +245,61 @@ def degraded_table(paths: list[Path]) -> None:
     print("  comparable to the Tesseract column, which is a measured classifier score.")
 
 
+# Every run of this file spends real money - it re-reads each document through the
+# live model path on purpose, because the point is to measure the system as it runs.
+# So the sets are selectable and the ladder is opt-in: the default should be the
+# thing you most often want, not the most expensive thing available.
+SETS = {
+    "controlled":  (GOLD_CONTROLLED, ROOT / "corpus",
+                    "CONTROLLED FIXTURES (written alongside the schemas)", "CONTROLLED"),
+    "synthetic":   (GOLD_GENERAL, ROOT / "eval" / "generalization",
+                    "SYNTHETIC ADVERSARIAL SET (written independently of the schemas, "
+                    "same author)", "SYNTHETIC ADVERSARIAL"),
+    "holdouts":    (GOLD_HOLDOUT, ROOT / "eval" / "holdouts",
+                    "EXTERNAL HOLDOUTS (real documents, different author, gold written "
+                    "before the run)", "EXTERNAL HOLDOUT"),
+}
+
+LADDER = [
+    ROOT / "eval" / "scans" / "po_acme_001_L1_clean.pdf",
+    ROOT / "eval" / "scans" / "po_acme_001_L2_medium.pdf",
+    ROOT / "eval" / "scans" / "po_acme_001_L3_degraded.pdf",
+    ROOT / "eval" / "generalization" / "G2_invoice_stamped_scan.pdf",
+    ROOT / "eval" / "generalization" / "G4_po_amended_scan.pdf",
+    ROOT / "eval" / "generalization" / "G6_receipt_thermal_scan.pdf",
+]
+
+
+def main() -> None:
+    import argparse
+
+    ap = argparse.ArgumentParser(
+        description="Ingestion eval. Every run makes live model calls and costs money.")
+    ap.add_argument("--sets", nargs="+", choices=[*SETS, "all"], default=["all"],
+                    help="which document sets to score (default: all)")
+    ap.add_argument("--ladder", action="store_true",
+                    help="also run the scan-degradation table: 6 documents twice each, "
+                         "with and without the vision fallback (~$0.37)")
+    ap.add_argument("--only", metavar="SUBSTRING",
+                    help="score just the documents whose filename contains this")
+    args = ap.parse_args()
+
+    chosen = list(SETS) if "all" in args.sets else args.sets
+    results = []
+    for key in chosen:
+        gold_path, doc_dir, heading, label = SETS[key]
+        tally, _ = evaluate(gold_path, doc_dir, heading, only=args.only)
+        results.append((tally, label))
+    for tally, label in results:
+        summarise(tally, label)
+
+    if args.ladder:
+        degraded_table(LADDER)
+
+    if SPEND:
+        print(f"\n  model spend for this run: ${sum(SPEND):.2f} "
+              f"over {len(SPEND)} document(s)")
+
+
 if __name__ == "__main__":
-    t1, _ = evaluate(GOLD_CONTROLLED, ROOT / "corpus", "CONTROLLED FIXTURES (written alongside the schemas)")
-    t2, _ = evaluate(GOLD_GENERAL, ROOT / "eval" / "generalization", "SYNTHETIC ADVERSARIAL SET (written independently of the schemas, same author)")
-    t3, _ = evaluate(GOLD_HOLDOUT, ROOT / "eval" / "holdouts", "EXTERNAL HOLDOUTS (real documents, different author, gold written before the run)")
-    summarise(t1, "CONTROLLED")
-    summarise(t2, "SYNTHETIC ADVERSARIAL")
-    summarise(t3, "EXTERNAL HOLDOUT")
-    degraded_table([
-        ROOT / "eval" / "scans" / "po_acme_001_L1_clean.pdf",
-        ROOT / "eval" / "scans" / "po_acme_001_L2_medium.pdf",
-        ROOT / "eval" / "scans" / "po_acme_001_L3_degraded.pdf",
-        ROOT / "eval" / "generalization" / "G2_invoice_stamped_scan.pdf",
-        ROOT / "eval" / "generalization" / "G4_po_amended_scan.pdf",
-        ROOT / "eval" / "generalization" / "G6_receipt_thermal_scan.pdf",
-    ])
+    main()
