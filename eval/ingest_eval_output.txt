@@ -15,7 +15,7 @@ invoice_acme_001.pdf
       OK   hydraulic coupling qty=80.0 unit=156.0 amt=12480.0
 
 po_acme_001.pdf
-  type       OK  got=purchase_order   expected=purchase_order   conf=0.99
+  type       OK  got=purchase_order   expected=purchase_order   conf=0.98
   ocr        95.1     file_type=pdf_scanned  status=extracted
     OK  po_number                PO-2026-0043                   expected='PO-2026-0043'
     OK  vendor_name              Acme Industrial Supply Co.     expected='Acme Industrial Supply Co.'
@@ -26,7 +26,7 @@ po_acme_001.pdf
       OK   hydraulic coupling qty=80.0 unit=None amt=12000.0
 
 vendor_records.xlsx
-  type       OK  got=vendor_record    expected=vendor_record    conf=0.99
+  type       OK  got=vendor_record    expected=vendor_record    conf=0.98
   ocr        digital  file_type=xlsx         status=extracted
     OK  vendor_id                V-1042                         expected='V-1042'
     OK  vendor_name              Acme Industrial Supply Co.     expected='Acme Industrial Supply Co.'
@@ -55,7 +55,7 @@ G1_invoice_northstar_multipage.pdf
       OK   carriage       qty=1.0 unit=85.0 amt=85.0
 
 G2_invoice_stamped_scan.pdf
-  type       OK  got=invoice          expected=invoice          conf=0.98
+  type       OK  got=invoice          expected=invoice          conf=0.95
   ocr        89.1     file_type=pdf_scanned  status=extracted
     OK  invoice_number           BES-77310                      expected='BES-77310'
     OK  vendor_name              BAYSIDE ELECTRICAL SUPPLY      expected='Bayside Electrical Supply'
@@ -82,12 +82,12 @@ G3_blanket_purchase_agreement.pdf
 
 G4_po_amended_scan.pdf
   type       OK  got=purchase_order   expected=purchase_order   conf=0.95
-  ocr        88.0     file_type=pdf_scanned  status=extracted
+  ocr        92.0     file_type=pdf_scanned  status=extracted
     OK  po_number                HC-2026-8802                   expected='HC-2026-8802'
     OK  vendor_name              Harlow Components GmbH         expected='Harlow Components GmbH'
     OK  issue_date               2026-03-05                     expected='2026-03-05'
     OK  buyer_entity             Northwind Manufacturing LLC    expected='Northwind Manufacturing LLC'
-    FAIL committed_amount         19400.0                        expected=18750.0
+    OK  committed_amount         19400.0                        expected=19400.0
 
 G5_receipt_office_supply.pdf
   type       OK  got=unknown          expected=unknown          conf=0.98
@@ -98,14 +98,14 @@ G6_receipt_thermal_scan.pdf
   ocr        78.0     file_type=pdf_scanned  status=unknown_type
 
 G7_supplier_terms_horizontal.xlsx
-  type       OK  got=vendor_record    expected=vendor_record    conf=0.95
+  type       OK  got=vendor_record    expected=vendor_record    conf=0.98
   ocr        digital  file_type=xlsx         status=needs_review_missing_fields
     OK  vendor_id                None                           correctly absent
     OK  vendor_name              None                           correctly absent
     OK  contracted_unit_price    None                           correctly absent
 
 G8_safety_data_sheet.pdf
-  type       OK  got=unknown          expected=unknown          conf=0.95
+  type       OK  got=unknown          expected=unknown          conf=0.98
   ocr        digital  file_type=pdf_digital  status=unknown_type
 
 ==============================================================================
@@ -113,12 +113,12 @@ EXTERNAL HOLDOUTS (real documents, different author, gold written before the run
 ==============================================================================
 
 gkdb0226.pdf
-  type       OK  got=invoice          expected=invoice          conf=0.85
+  type       OK  got=invoice          expected=invoice          conf=0.75
   ocr        90.1     file_type=pdf_scanned  status=needs_review_missing_fields
     MISS invoice_number           None                           expected='1179'
-    FAIL vendor_name              Marista LABORATORIES           expected='Arista Laboratories'
+    FAIL vendor_name              Marista Laboratories           expected='Arista Laboratories'
     MISS invoice_date             None                           expected='2005-01-31'
-    FAIL po_reference             PM3006879334                   (any of [None, '85000014180'])
+    FAIL po_reference             PM3006879334                   expected='85000014180'
     OK  total_amount             133337.5                       expected=133337.5
   FAIL line_items  16 extracted, 14 expected
 
@@ -152,15 +152,12 @@ CONTROLLED SUMMARY
 ------------------------------------------------------------------------------
 SYNTHETIC ADVERSARIAL SUMMARY
   classification                8/8
-  schema-representable scalars  22/23
+  schema-representable scalars  23/23
      ^ this is NOT document accuracy. It counts only single-valued fields the
        configured schema can hold; repeating and multi-record data is below.
   line items                    15/15
-  DOCUMENT COMPLETENESS         7/8  (documents with nothing wrong, missing or unrepresentable)
+  DOCUMENT COMPLETENESS         8/8  (documents with nothing wrong, missing or unrepresentable)
   hallucinations                0
-
-  FAILURES (1):
-    [fail         ] G4_po_amended_scan.pdf :: committed_amount  got 19400.0, expected 18750.0
 
 ------------------------------------------------------------------------------
 EXTERNAL HOLDOUT SUMMARY
@@ -175,9 +172,9 @@ EXTERNAL HOLDOUT SUMMARY
 
   FAILURES (5):
     [miss         ] gkdb0226.pdf :: invoice_number  got None, expected '1179'
-    [fail         ] gkdb0226.pdf :: vendor_name  got 'Marista LABORATORIES', expected 'Arista Laboratories'
+    [fail         ] gkdb0226.pdf :: vendor_name  got 'Marista Laboratories', expected 'Arista Laboratories'
     [miss         ] gkdb0226.pdf :: invoice_date  got None, expected '2005-01-31'
-    [fail         ] gkdb0226.pdf :: po_reference  got 'PM3006879334'
+    [fail         ] gkdb0226.pdf :: po_reference  got 'PM3006879334', expected '85000014180'
     [fail         ] gkdb0226.pdf :: __line_items__  got 16, expected 14
 
 ====================================================================================================================
@@ -185,23 +182,23 @@ DEGRADED-CASE LADDER
 ====================================================================================================================
 document                        fb?  class             tess   post                      decision           missing     cost   lat
 ---------------------------------------------------------------------------------------------------------------------------------
-po_acme_001_L1_clean.pdf        no   purchase_order    95.1      -                     extracted                 -   0.0260   6.2
-                                yes  purchase_order    95.1      -                     extracted                 -   0.0260   6.7
+po_acme_001_L1_clean.pdf        no   purchase_order    95.1      -                     extracted                 -   0.0267   7.3
+                                yes  purchase_order    95.1      -                     extracted                 -   0.0267   6.4
 
-po_acme_001_L2_medium.pdf       no   purchase_order    62.4      -                     extracted                 -   0.0267   7.2
-                                yes  purchase_order    62.4   93.0                     extracted                 -   0.0627  11.9
+po_acme_001_L2_medium.pdf       no   purchase_order    62.4      -                     extracted                 -   0.0274   7.6
+                                yes  purchase_order    62.4   94.0                     extracted                 -   0.0637  15.5
 
-po_acme_001_L3_degraded.pdf     no   purchase_order    43.4      -              needs_review_ocr                 -   0.0000   1.7
-                                yes  purchase_order    43.4   88.0                     extracted                 -   0.0633  14.1
+po_acme_001_L3_degraded.pdf     no   purchase_order    43.4      -              needs_review_ocr                 -   0.0000   1.8
+                                yes  purchase_order    43.4   88.0                     extracted                 -   0.0644  13.3
 
-G2_invoice_stamped_scan.pdf     no   invoice           89.1      -                     extracted                 -   0.0266   8.0
-                                yes  invoice           89.1      -                     extracted                 -   0.0273   8.2
+G2_invoice_stamped_scan.pdf     no   invoice           89.1      -                     extracted                 -   0.0264   6.8
+                                yes  invoice           89.1      -                     extracted                 -   0.0287   7.5
 
-G4_po_amended_scan.pdf          no   purchase_order    55.1      -   needs_review_missing_fieldsvendor_name,committed_amount   0.0251   6.4
-                                yes  purchase_order    55.1   88.0                     extracted                 -   0.0633  12.1
+G4_po_amended_scan.pdf          no   purchase_order    55.1      -   needs_review_missing_fields       vendor_name   0.0263   7.5
+                                yes  purchase_order    55.1   93.0                     extracted                 -   0.0627  14.0
 
-G6_receipt_thermal_scan.pdf     no   unknown           33.3      -              needs_review_ocr                 -   0.0000   1.4
-                                yes  unknown           33.3   78.0                  unknown_type                 -   0.0200   7.9
+G6_receipt_thermal_scan.pdf     no   unknown           33.3      -              needs_review_ocr                 -   0.0000   1.3
+                                yes  unknown           33.3   78.0                  unknown_type                 -   0.0208   5.4
 
   `post` is the vision model's SELF-REPORTED legibility - model-graded, and NOT
   comparable to the Tesseract column, which is a measured classifier score.

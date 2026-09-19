@@ -23,12 +23,14 @@ documents:
       # consume. Gold records what the PAGE says.
       vendor_name:    {value: "Arista Laboratories"}
       invoice_date:   {value: "2005-01-31"}
-      # Genuinely ambiguous on the page, and the ambiguity is the test. The printed
-      # P.O. 8500005968 is struck through; a handwritten 850001215 below it is also
-      # struck through; 85000 14180 is handwritten above the table. Declining (null)
-      # and reading the surviving handwritten value are both defensible. Returning a
-      # struck-through number as the live PO reference is not.
-      po_reference:   {any_of: [null, "85000014180"]}
+      # TIGHTENED when the amendment policy was adopted. The printed P.O. 8500005968
+      # is struck through; the handwritten 850001215 below it is struck through too;
+      # 85000 14180 is handwritten above the table and is NOT struck. Under the
+      # policy - a struck value is retired, the survivor is the answer - this field
+      # has one correct value rather than a defensible range, so null is no longer
+      # accepted. This is the independent test of that policy: it was written for
+      # G4 and gkdb0226 played no part in writing it.
+      po_reference:   {value: "8500014180"}
       total_amount:   {value: 133337.50}
     line_items:
       # 6 assays at qty 20, the same 6 at qty 50, the MASS surcharge, and the report.

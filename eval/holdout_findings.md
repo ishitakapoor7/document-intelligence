@@ -331,3 +331,95 @@ The lesson is not about tobacco-industry paperwork. It is that a corpus authored
 the same person as the schemas will agree with the schemas' assumptions, including
 the assumptions nobody wrote down — and that the cheapest, highest-yield thing
 available to this project was three documents somebody else picked.
+
+---
+
+## 8. The amendment policy, and validating it on a document it was not written for
+
+**Policy decision (product owner, reversing my earlier gold):** a value that is struck
+through has been *retired by the document*. Disregard it and take the surviving value
+written beside it, handwritten included.
+
+My earlier gold said the opposite for `G4` — prefer the printed EUR 18,750.00, because
+the handwritten 19,400.00 is uncountersigned while the document's own footer requires
+countersignature. That reading is still defensible. It lost on a judgement call, not
+on evidence, and `generalization_gold.yaml` now records both the reversal and the
+reason, because **gold may be changed by a decision about what the right answer is and
+must never be changed to match what the system happened to output.**
+
+### It needed two layers, not one
+
+Recognition had no vocabulary for a correction. The vision prompt marked `[HANDWRITTEN]`
+and `[STAMP]` but nothing for strike-through, so a transcription flattened a retired
+value and its replacement into two equally-valid-looking numbers, and no downstream
+policy could tell them apart. Marking a correction is recognition's job; deciding what
+it means is extraction's. The transcriber now emits `[STRUCK]...[/STRUCK]`.
+
+### G4: 5/5, from 8-of-9 abstaining
+
+| | before | after |
+|---|---|---|
+| `committed_amount` | abstained 8/9, asserted 19,400.00 once | **19,400.00, 5/5** |
+
+The earlier abstaining was never an amendment policy — it was an accidental side
+effect of the multi-record rule, which is exactly why it was unstable. The synthetic
+adversarial set is now **23/23 scalars and 8/8 document completeness**, its first
+clean sweep.
+
+### gkdb0226: the independent test
+
+The holdout had no part in writing the policy. Its P.O. Number field is a three-way
+correction: printed `8500005968` struck through, handwritten `850001216 5` below it
+*also* struck through, and `85000 14180` handwritten above the table, unstruck.
+
+Vision transcribes it exactly, every time:
+
+```
+[HANDWRITTEN] 8500014180
+| [STRUCK]8500005968[/STRUCK] | Net 30 | 1862 | 14674 |
+[HANDWRITTEN] [STRUCK]850001216 5[/STRUCK]
+```
+
+`[STRUCK]` markers present **4/4 runs**; the surviving value present **4/4**.
+Extraction over 7 runs: **5 correct, 2 abstentions, 0 wrong values.**
+
+Escalated to vision, the same page also finally yields `invoice_number = 1179`,
+`invoice_date = 2005-01-31` and — for the first time anywhere in this project — the
+vendor name **"Arista Laboratories"**, which the archive's OCR reads as "Uristo" and
+our Tesseract reads as "Marista".
+
+### Pushing it to abstain less bought wrong answers
+
+The two abstentions looked like a rule collision: struck-plus-survivor reads as
+"several candidates that differ", which the multi-record rule answers with null. So a
+sentence was added giving the amendment rule precedence — *one surviving value means
+one answer, not an ambiguity*.
+
+| gkdb0226 `po_reference` | correct | abstained | **wrong** |
+|---|---|---|---|
+| without the precedence rule (n=7) | 5 | 2 | **0** |
+| with it (n=5) | 2 | 1 | **2** |
+
+Both wrong answers were variants of the struck-through handwritten candidate
+(`8500012105`, `8500012155`). Telling the model to commit rather than abstain did not
+make it more certain; it made it guess, and it guessed at the value the document had
+crossed out.
+
+**Reverted.** The abstentions were the system declining when it could not tell which
+value had survived, and that is the behaviour worth keeping. This is the trade the
+whole project turns on, measured on one field: buying a 29% reduction in abstention
+cost a 40% wrong-answer rate on a field where being wrong means citing a cancelled
+purchase order number.
+
+### What still blocks it in the real pipeline
+
+None of this fires by default on `gkdb0226`. Tesseract scores the page **90.1** —
+above the escalation gate — while having silently dropped the *entire* P.O. Number
+field, printed and handwritten, along with the invoice number and date. Its text
+contains no `8500`, no `14180`, no `P.O` at all.
+
+**Confidence scores the words it found and says nothing about the ones it never
+found.** Coverage is invisible to it. Rather than retune a threshold against one
+document, the control is exposed — `docint ingest --force-vision` — and the real fix
+is recorded above as this evaluation's strongest future item: run both transcriptions
+and treat disagreement between them as the signal.

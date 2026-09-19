@@ -91,7 +91,8 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     directory = Path(args.path)
     print(f"\ningesting {directory}/")
     results = ingest_directory(directory, force=args.force,
-                               vision_fallback=not args.no_vision_fallback)
+                               vision_fallback=not args.no_vision_fallback,
+                               force_vision=args.force_vision)
 
     counts: dict[str, int] = {}
     for path, outcome in results:
@@ -251,6 +252,10 @@ def main(argv: list[str] | None = None) -> int:
     p_ingest.add_argument("path", nargs="?", default=str(CORPUS_DIR))
     p_ingest.add_argument("--no-vision-fallback", action="store_true",
                           help="disable the Claude vision OCR escalation")
+    p_ingest.add_argument("--force-vision", action="store_true",
+                          help="escalate every scanned page to Claude vision, whatever "
+                               "Tesseract's confidence says - it scores the words it "
+                               "found, not the ones it dropped")
     p_ingest.add_argument("--force", action="store_true",
                           help="re-ingest even if the content hash is already in the manifest")
     p_ingest.set_defaults(func=cmd_ingest)

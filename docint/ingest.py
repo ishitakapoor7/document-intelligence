@@ -44,7 +44,7 @@ def save_manifest(manifest: dict[str, ManifestEntry]) -> None:
 
 def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
                     force: bool = False, vision_fallback: bool = True,
-                    index=None) -> IngestOutcome:
+                    force_vision: bool = False, index=None) -> IngestOutcome:
     path = Path(path)
     started = time.perf_counter()
 
@@ -62,9 +62,16 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
         return IngestOutcome(status="unsupported_format", detail=str(exc))
 
     # 3. Recognition ladder: escalate a poorly-read scan to vision before judging it.
+    # `force_vision` exists because Tesseract confidence measures the words it FOUND
+    # and says nothing about what it never found. gkdb0226.pdf scores 90.1 - above the
+    # escalation gate - while having silently dropped the entire P.O. Number field and
+    # misread the letterhead. Escalated anyway, the same page yields the invoice
+    # number, the correct vendor and the struck/surviving PO pair. Coverage is
+    # invisible to confidence, so the control is exposed rather than the gate retuned
+    # on one document.
     tess = document.ocr.tesseract_confidence
-    if (vision_fallback and tess is not None and tess < MIN_OCR_FOR_VISION_FALLBACK
-            and path.suffix.lower() == ".pdf"):
+    if (vision_fallback and tess is not None and path.suffix.lower() == ".pdf"
+            and (force_vision or tess < MIN_OCR_FOR_VISION_FALLBACK)):
         from docint.vision_ocr import escalate
         chunks, legibility, cost, latency = escalate(path, chunks)
         document.ocr.fallback_used = True
@@ -149,6 +156,7 @@ def _finish(manifest, document: Document, chunks: list[Chunk], started: float,
 
 
 def ingest_directory(directory: Path, *, force: bool = False, vision_fallback: bool = True,
+                     force_vision: bool = False,
                      index=None) -> list[tuple[Path, IngestOutcome]]:
     manifest = load_manifest()
     if index is None:
@@ -159,6 +167,7 @@ def ingest_directory(directory: Path, *, force: bool = False, vision_fallback: b
         if path.is_dir() or path.name.startswith("."):
             continue
         results.append((path, ingest_document(path, manifest, force=force,
-                                              vision_fallback=vision_fallback, index=index)))
+                                              vision_fallback=vision_fallback,
+                                              force_vision=force_vision, index=index)))
     save_manifest(manifest)
     return results

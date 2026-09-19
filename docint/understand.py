@@ -201,6 +201,26 @@ def extract(document: Document, chunks: list[Chunk]):
         f"a {document.document_type.replace('_', ' ')}. If exactly ONE such record is "
         "present, extract it normally, even when the file also holds other kinds of "
         "paperwork carrying their own amounts, dates and reference numbers.\n\n"
+        # Amendment policy. Deliberately a product decision rather than an inference:
+        # a document that strikes a value out has retired it, and the surviving value
+        # beside it is the one the document now asserts. This reverses the earlier
+        # gold for G4, which preferred the printed value on the grounds that the
+        # handwritten amendment was not countersigned. That reading is defensible and
+        # it is not the one chosen here.
+        "If a value is struck through, crossed out or overwritten - marked [STRUCK] "
+        "in the text, or otherwise shown as cancelled - the document has RETIRED it. "
+        "Do not return a struck value. Use the surviving value written next to it "
+        "instead, including a handwritten one, and cite the chunk it appears in. If "
+        "several candidates are struck and one is not, the unstruck one is the "
+        "answer. If every candidate is struck and nothing replaces them, return "
+        "null.\n\n"
+        # REVERTED: a sentence once stood here giving this rule precedence over the
+        # multi-record rule, because struck-plus-survivor reads as "several candidates
+        # that differ" and was abstaining on 2 of 7 runs. Pushing it to commit rather
+        # than abstain moved gkdb0226 from 5/7 correct with 0 wrong to 2/5 correct
+        # with 2 WRONG - and both wrong answers were variants of the struck-through
+        # candidate. The abstentions were the system declining when it was unsure
+        # which value had survived, which is the behaviour worth keeping.
         "List EVERY billed or ordered line in line_items; do not summarise or truncate. "
         "Dates must be ISO YYYY-MM-DD. Currency and numeric values must be plain numbers "
         "with no symbols or thousands separators.\n\n"

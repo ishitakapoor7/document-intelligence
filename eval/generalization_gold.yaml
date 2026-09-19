@@ -81,11 +81,21 @@ documents:
 
   G4_po_amended_scan.pdf:
     what_makes_it_hard: >-
-      Scanned, with a handwritten amendment striking through the printed order
-      value and writing a different figure above it. The printed value is the
-      authoritative one - the amendment is unsigned and the document itself says
-      amendments must be countersigned. A system that reads handwriting as
-      authoritative is wrong here, and one that silently merges the two is worse.
+      Scanned, with a handwritten amendment striking through the printed order value
+      and writing a different figure above it. A system that silently merges the two,
+      or that returns the value the document crossed out, is wrong.
+    # GOLD REVERSED - by a policy decision, not by a result.
+    #
+    # This expected 18750.00 (the printed figure) on the grounds that the handwritten
+    # amendment is uncountersigned while the document's own footer says amendments
+    # must be countersigned. The product owner has decided the opposite rule: a struck
+    # value has been retired by the document, and the surviving value beside it is
+    # what the document now asserts. Expected is therefore 19400.00.
+    #
+    # Recording why the distinction matters: gold may be changed by a decision about
+    # what the right answer IS, and must never be changed to match what the system
+    # happened to output. The earlier reading is still defensible - see
+    # eval/holdout_findings.md - and it lost on a judgement call, not on evidence.
     expect_document_type: purchase_order
     expect_file_type: pdf_scanned
     fields:
@@ -93,7 +103,7 @@ documents:
       vendor_name:      {value: "Harlow Components GmbH"}
       issue_date:       {value: "2026-03-05"}             # labelled "Dated"
       buyer_entity:     {value: "Northwind Manufacturing LLC"}
-      committed_amount: {value: 18750.00, note: "printed value; handwritten 19,400.00 is an uncountersigned amendment"}
+      committed_amount: {value: 19400.00, note: "handwritten survivor; the printed EUR 18,750.00 is struck through and therefore retired"}
 
   G5_receipt_office_supply.pdf:
     what_makes_it_hard: >-
