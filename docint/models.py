@@ -209,6 +209,14 @@ class DraftAnswer(BaseModel):
     answer: str
     claims: list[Claim] = Field(default_factory=list)
 
+    # Whether the cited chunks actually answer the QUESTION - distinct from whether
+    # any true claim could be made from them. The two come apart constantly: asked to
+    # compare an invoice against a contract while holding only the contract, the model
+    # correctly says it cannot, and correctly states several true facts about the
+    # contract on the way. Counting claims reads that as an answer. Asking for the
+    # judgement directly is the difference between a refusal and a subject change.
+    answers_question: bool = True
+
 
 class Verdict(BaseModel):
     """A verifier's judgement on one claim against one cited chunk."""

@@ -1,0 +1,94 @@
+# Query-path eval cases.
+#
+# Classification, OCR routing and field extraction are scored separately by
+# eval/run_ingest_eval.py against gold.yaml and generalization_gold.yaml. This file
+# covers only what happens AFTER ingestion: retrieval, answering, citation and
+# refusal. Splitting them keeps each number attributable to one stage.
+#
+# `expect_sources` is the set of documents gold says can legitimately support this
+# answer. It is expressed as filenames, not chunk IDs, deliberately: chunk IDs are
+# stable by construction but re-authoring the corpus would move every one of them,
+# and a gold file that has to be regenerated is a gold file nobody trusts. The
+# harness resolves cited IDs back to filenames through the store.
+
+cases:
+
+  - id: C1
+    name: single-document extraction
+    question: What is the total amount due on invoice INV-2026-0117?
+    principal: procurement_analyst
+    expect_status: answered
+    expect_entities: ["12,480.00"]
+    expect_sources: [invoice_acme_001.pdf]
+    must_retrieve: [invoice_acme_001.pdf]
+
+  - id: C2
+    name: cross-document comparison
+    question: >-
+      Did Acme bill us above their contracted rate on INV-2026-0117, and does the
+      invoice stay within what PO-2026-0043 committed?
+    principal: procurement_analyst
+    expect_status: answered
+    expect_entities: ["156.00", "150.00", "480.00", "12,480.00", "12,000.00"]
+    expect_sources: [invoice_acme_001.pdf, po_acme_001.pdf, vendor_records.xlsx]
+    must_retrieve: [invoice_acme_001.pdf, po_acme_001.pdf, vendor_records.xlsx]
+    # the claim the whole design exists to make safe: it must rest on more than one
+    # document type, and one of its sources must be the scanned page
+    expect_min_document_types_cited: 2
+    expect_cites_scanned_source: true
+
+  - id: C3
+    name: exact identifier lookup on a scanned document
+    # This is the documented trigger for building hybrid retrieval (README: deferred).
+    # Dense-only retrieval is weakest on exact identifiers; the deferral is only
+    # honest if the case that would falsify it is actually run.
+    question: What quantity was ordered on PO-2026-0043, and what is the not-to-exceed amount?
+    principal: procurement_analyst
+    expect_status: answered
+    expect_entities: ["80", "12,000.00"]
+    expect_sources: [po_acme_001.pdf]
+    must_retrieve: [po_acme_001.pdf]
+
+  - id: C4
+    name: unsupported question
+    question: What is the contracted unit price for Globex Materials Inc?
+    principal: procurement_analyst
+    # Globex appears nowhere in the corpus. Retrieval will still return the vendor
+    # sheet - it is the nearest thing - so this tests refusal on RELEVANT-LOOKING
+    # but non-answering evidence, which is harder than refusal on an empty result.
+    expect_status: refused
+
+  - id: C5
+    name: access denied, partial evidence
+    question: >-
+      Did Acme bill us above their contracted rate on INV-2026-0117, and does the
+      invoice stay within what PO-2026-0043 committed?
+    principal: external_auditor
+    expect_status: refused
+    # the point of the case: the auditor CAN see the contracted rate and still must
+    # refuse, because the invoice it would be compared against is filtered out
+    must_retrieve: [vendor_records.xlsx]
+    must_not_retrieve: [invoice_acme_001.pdf, po_acme_001.pdf]
+
+  - id: C6
+    name: planted claim, stripped and recovered
+    question: >-
+      Did Acme bill us above their contracted rate on INV-2026-0117, and does the
+      invoice stay within what PO-2026-0043 committed?
+    principal: procurement_analyst
+    inject: once            # FAULT INJECTION - not an observed hallucination
+    expect_status: answered
+    expect_stripped_min: 1
+    expect_regenerations: 1
+    expect_injected_claim_stripped: true
+
+  - id: C7
+    name: planted claim, unrecoverable
+    question: >-
+      Did Acme bill us above their contracted rate on INV-2026-0117, and does the
+      invoice stay within what PO-2026-0043 committed?
+    principal: procurement_analyst
+    inject: always          # the fault survives regeneration, so refusal is correct
+    expect_status: refused
+    expect_stripped_min: 1
+    expect_injected_claim_stripped: true

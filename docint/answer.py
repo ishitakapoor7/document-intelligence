@@ -68,8 +68,11 @@ def _generate(question: str, nodes, rejections: list[StrippedClaim]) -> tuple[Dr
         "Answer the question using ONLY the chunks below. Break the answer into "
         "individual factual claims. Every claim must cite the chunk_id(s) that directly "
         "support it, copied exactly from the headers. Do not cite a chunk that does not "
-        "contain the supporting text. If the chunks do not support an answer, return an "
-        "empty claims list and say so in `answer`."
+        "contain the supporting text.\n\n"
+        "Set answers_question=false if the chunks do not let you answer the question "
+        "that was asked - even if you can state true facts from them, and even if they "
+        "answer part of it. Answering half of a two-part question is not answering it. "
+        "When you set it false, say in `answer` what is missing and what you would need."
         f"{feedback}\n\n"
         f"<question>{question}</question>\n\n<chunks>\n{_render(nodes)}\n</chunks>"
     )
@@ -128,6 +131,26 @@ def _verify(claim_text: str, sources: list[tuple[str, str]]) -> tuple[Verdict, f
 # verifier on demand - the eval cannot wait for a hallucination to occur naturally.
 FAULT_CLAIM = ("Acme Industrial Supply Co. applied a 12% early-payment discount to "
                "INV-2026-0117, reducing the amount due to $10,982.40.")
+
+
+def is_refusal(kept: list[Claim], draft: DraftAnswer) -> bool:
+    """Is this outcome really a refusal, whatever prose came back with it?
+
+    A standalone predicate because this one rule has been wrong twice, in opposite
+    directions, and both times it silently inflated the answered rate and deflated
+    the abstention rate - the two numbers the system is judged on. Its own function
+    so it has its own test.
+
+      - nothing survived verification: the model returned zero claims and explained
+        it could not answer, which "was anything stripped?" scored as an answer.
+      - claims that do not address the question: an auditor holding only the vendor
+        record returned three true, verified claims prefaced by "the chunks provided
+        don't let me answer this".
+
+    Both mistakes have one shape - inferring status from claim bookkeeping instead of
+    from whether the question was answered.
+    """
+    return not kept or not draft.answers_question
 
 
 def answer_question(question: str, principal: str, access_tags: frozenset[str],
@@ -215,15 +238,24 @@ def answer_question(question: str, principal: str, access_tags: frozenset[str],
         trace.rounds.append(rnd)
         trace.total_cost_usd += rnd.cost_usd
 
-        # An answer with no verified claims is a refusal, whatever prose came with it.
-        # Checking only "was anything stripped" reported `answered` when the model
-        # correctly returned zero claims and explained it could not answer - which
-        # would have silently inflated the answered rate in the eval.
-        if not kept:
+        # Two ways an answer is really a refusal, and both were found the hard way.
+        #
+        # No verified claims: checking only "was anything stripped" reported `answered`
+        # when the model returned zero claims and explained it could not answer.
+        #
+        # Claims that do not address the question: the external_auditor case returned
+        # three true, verified claims about the one document it could see, prefaced by
+        # "the chunks provided don't let me answer this". Counting claims called that
+        # an answer too. The first fix closed one door of the same mistake - inferring
+        # status from claim bookkeeping instead of from whether the question was
+        # answered - and both errors inflate the answered rate and deflate abstention,
+        # which are the two numbers this system is judged on.
+        if is_refusal(kept, draft):
             trace.final_status = "refused"
             trace.refusal_reason = (draft.answer or
                                     "the accessible documents do not support an answer")
             trace.final_answer = None
+            trace.kept_claims = []
             break
 
         if not rnd.stripped:
