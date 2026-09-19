@@ -52,7 +52,8 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
     #    including every model call. This is why a re-run is instant and free.
     digest = content_hash(path)
     if not force and digest in manifest:
-        return IngestOutcome(status="unchanged", detail=manifest[digest].document_id)
+        return IngestOutcome(status="unchanged", detail=manifest[digest].document_id,
+                             remembered=manifest[digest])
 
     # 2. Parse. Locations attached in-loop; IDs from content hash + location.
     try:
@@ -138,6 +139,10 @@ def _finish(manifest, document: Document, chunks: list[Chunk], started: float,
         document_type=document.document_type,
         chunk_ids=[c.chunk_id for c in chunks],
         ingested_at=datetime.now(timezone.utc),
+        status=document.status,
+        review_reason=document.review_reason,
+        missing_required_fields=document.missing_required_fields,
+        ocr_mean_confidence=document.ocr_mean_confidence,
     )
     return IngestOutcome(status=document.status, document=document, chunks=chunks,
                          detail=document.review_reason)

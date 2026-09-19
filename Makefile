@@ -5,6 +5,7 @@ PY := .venv/bin/python
 help:
 	@echo "  make doctor       check the environment before anything else"
 	@echo "  make ingest       parse, classify and extract corpus/"
+	@echo "  make review       list documents waiting on a human"
 	@echo "  make demo         the 2-minute walkthrough"
 	@echo "  make eval         query-path eval    -> runs/report.md"
 	@echo "  make eval-ingest  ingestion eval across both document sets"
@@ -37,3 +38,6 @@ test:
 clean-index:
 	@rm -rf runs/chroma runs/manifest.json
 	@echo "index and manifest cleared - the next ingest will re-run every model call"
+
+review:
+	@$(PY) -m docint.cli review

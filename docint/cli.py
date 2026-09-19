@@ -28,7 +28,14 @@ def _print_outcome(path: Path, outcome: IngestOutcome) -> None:
     doc = outcome.document
 
     if outcome.status == "unchanged":
-        print(f"  {path.name:<30} {DIM}unchanged{RESET}  {DIM}{outcome.detail}{RESET}")
+        # Carry the remembered verdict. Without it, idempotence silently emptied the
+        # review queue: the second run of a corpus said `unchanged` for a document
+        # the first run had flagged for a human.
+        remembered = outcome.remembered
+        flag = ""
+        if remembered is not None and remembered.status != "extracted":
+            flag = f"  {BOLD}[{remembered.status}]{RESET}"
+        print(f"  {path.name:<30} {DIM}unchanged{RESET}  {DIM}{outcome.detail}{RESET}{flag}")
         return
     if outcome.status == "unsupported_format":
         print(f"  {path.name:<30} unsupported  {outcome.detail}")
@@ -146,6 +153,50 @@ def cmd_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_review(args: argparse.Namespace) -> int:
+    """List every ingested document waiting on a human, and why.
+
+    This is the whole of the human-in-the-loop story and it is deliberately not a
+    workflow: no assignment, no locking, no resume, no state transitions. Human
+    review is an OUTPUT STATE - the pipeline stops, says what it could not do, and
+    leaves the document indexed and findable. What this command adds is that the
+    state is durable and queryable rather than a line that scrolled past during an
+    ingest six hours ago.
+
+    The deferred upgrade, with its trigger, is in the README: when review becomes a
+    workflow someone works through - claims an item, resolves it, and the correction
+    flows back - that is a durable, resumable process and the right moment to bring
+    in a graph runtime. It is not this.
+    """
+    from docint.ingest import load_manifest
+
+    manifest = load_manifest()
+    waiting = sorted((e for e in manifest.values() if e.status != "extracted"),
+                     key=lambda e: (e.status, e.filename))
+
+    if not manifest:
+        print("\n  nothing ingested yet - run `make ingest`\n")
+        return 0
+    if not waiting:
+        print(f"\n  {len(manifest)} document(s) ingested, none waiting on a human\n")
+        return 0
+
+    print(f"\n  {BOLD}{len(waiting)} of {len(manifest)} document(s) need a human{RESET}\n")
+    for entry in waiting:
+        conf = (f"recognition {entry.ocr_mean_confidence:.1f}"
+                if entry.ocr_mean_confidence is not None else "born-digital text")
+        print(f"  {BOLD}{entry.filename}{RESET}")
+        print(f"    {entry.status}   {DIM}{entry.document_type} · {conf} · "
+              f"{entry.document_id}{RESET}")
+        if entry.missing_required_fields:
+            print(f"    missing: {', '.join(entry.missing_required_fields)}")
+        if entry.review_reason:
+            print(f"    {DIM}{entry.review_reason}{RESET}")
+        print(f"    {DIM}inspect: docint show {entry.chunk_ids[0] if entry.chunk_ids else '<no chunks>'}{RESET}")
+        print()
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Check the things a fresh clone gets wrong, before they fail mid-pipeline.
 
@@ -219,6 +270,9 @@ def main(argv: list[str] | None = None) -> int:
     p_show.add_argument("--as", dest="as_profile", default="procurement_analyst",
                         choices=sorted(ACCESS_PROFILES))
     p_show.set_defaults(func=cmd_show)
+
+    p_review = sub.add_parser("review", help="list documents waiting on a human, and why")
+    p_review.set_defaults(func=cmd_review)
 
     p_doctor = sub.add_parser("doctor", help="check the environment and index state")
     p_doctor.set_defaults(func=cmd_doctor)

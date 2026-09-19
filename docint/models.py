@@ -174,6 +174,16 @@ class ManifestEntry(BaseModel):
     chunk_ids: list[str]
     ingested_at: datetime
 
+    # The review verdict is persisted, not merely printed. It used to live only in
+    # the terminal output of the run that produced it, which meant idempotence ate
+    # it: the second ingest reported `unchanged` and said nothing about the document
+    # sitting in review. A system that decides something needs a human and then
+    # forgets by the next run has not escalated anything.
+    status: DocumentStatus = "extracted"
+    review_reason: str | None = None
+    missing_required_fields: list[str] = Field(default_factory=list)
+    ocr_mean_confidence: float | None = None
+
 
 class IngestOutcome(BaseModel):
     """What happened to one file. Status mirrors DocumentStatus so there is one
@@ -183,6 +193,8 @@ class IngestOutcome(BaseModel):
     document: Document | None = None
     chunks: list[Chunk] = Field(default_factory=list)
     detail: str | None = None
+    # What the manifest already knew about this file, when status == "unchanged".
+    remembered: "ManifestEntry | None" = None
 
     @property
     def did_work(self) -> bool:
