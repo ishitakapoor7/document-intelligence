@@ -191,10 +191,10 @@ the answer.
 
 ## 5. Line items: a definitional gap, not an error
 
-`gkdb0226` returned **16** line items where gold says 14. The two extra are the
-`Subtotal` rows (36,700.00 and 91,750.00), captured with no quantity and no unit
+`gkdb0226` returns **16 or 17** line items where gold says 14. Two of the extras are
+the `Subtotal` rows (36,700.00 and 91,750.00), captured with no quantity and no unit
 price. They are legitimately rows of the table and they are not billable lines —
-summing all sixteen double-counts the invoice.
+summing them double-counts the invoice.
 
 `LineItem` has no way to say "this row is a subtotal", so there is no way for a
 consumer to tell. The narrow fix is a row-kind discriminator; gold's definition
@@ -292,13 +292,13 @@ Final, complete, after every change described above:
 |---|---|---|---|---|---|
 | Controlled (3 docs) | 3/3 | 15/15 | 4/4 | 3/3 | 0 |
 | Synthetic adversarial (8 docs) | 8/8 | 22/23 | 15/15 | 7/8 | 0 |
-| **External holdout (3 docs)** | **3/3** | **9/13** | **0/1** | **1/3** | **0** |
+| **External holdout (3 docs)** | **3/3** | **12/13** | **0/1** | **1/3** | **0** |
 
 Per holdout:
 
 | document | type | status | outcome |
 |---|---|---|---|
-| `gkdb0226` invoice | invoice ✓ | `needs_review_missing_fields` | total correct; invoice number and date lost to OCR; vendor read "Marista"; PO field took a Bates number |
+| `gkdb0226` invoice | invoice ✓ | `extracted` | number, vendor, date and total all correct; the struck-through PO number is returned or declined depending on the run, never returned wrong |
 | `lmcj0190` freight/returns packet | unknown ✓ | `needs_review_ocr` | all fields null ✓ — tried twice to read it, could not, said so |
 | `lnml0028` AP packet | invoice (accepted) | `needs_review_missing_fields` | vendor, date and $4,667.00 correct out of four competing amounts; no invoice number exists, correctly flagged |
 
@@ -307,12 +307,16 @@ different industry**, including a correct `unknown` on a freight-bill packet and
 correct `invoice` on a 2005 lab invoice — the fresh validation the tightened invoice
 taxonomy needed. **No value was invented in any of the three.**
 
-Scalar accuracy on the holdouts fell from 12/13 to 9/13 across the day's changes,
-while every remaining error moved from *silent* to *flagged*. That is the trade this
-system is supposed to make, and it is a trade: a document-intelligence layer that
-declines too readily is safe and useless. On this evidence it is not yet too cautious
-— `lnml0028` proves it still reads a hard document correctly — but three documents
-cannot settle where the line sits.
+Scalar accuracy on the holdouts fell from 12/13 to 9/13 partway through the day, as
+each fix traded a silent answer for a flagged one, and came back to **12/13** once
+recognition was escalated on a field deficit rather than on a confidence score. The
+route matters more than the endpoint: the 12/13 at the start included two confidently
+wrong values, and the 12/13 now includes none. Every remaining error is an abstention.
+
+That is the trade this system is supposed to make, and it is a trade: a
+document-intelligence layer that declines too readily is safe and useless. On this
+evidence it is not yet too cautious — `lnml0028` still reads a hard document
+correctly — but three documents cannot settle where the line sits.
 
 ---
 
