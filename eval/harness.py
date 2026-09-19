@@ -1,13 +1,10 @@
-"""Score the query path against eval/cases.yaml. Deterministic: no model grades anything.
+"""Score the query path against eval/cases.yaml. No model grades anything here: every
+judgement is a comparison between a QueryTrace and hand-written gold, recomputable
+from the trace files by hand.
 
-Every judgement below is a comparison between a QueryTrace and hand-written ground
-truth. The runtime verifier is a model call, so figures DERIVED from it - strip rate,
-regeneration rate - are reported in a separate section labelled model-graded. The
-headline numbers are the ones a second reader could recompute from the trace files
-by hand.
-
-Ingestion is scored elsewhere (eval/run_ingest_eval.py). Splitting the two keeps each
-number attributable to one stage rather than to "the system".
+The runtime verifier is a model call, so figures derived from it - strip and
+regeneration rates - are reported separately and labelled model-graded. Ingestion is
+scored in run_ingest_eval.py, so each number attributes to one stage.
 """
 from __future__ import annotations
 
@@ -37,15 +34,9 @@ NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
 def entity_present(entity: str, answer: str) -> bool:
     """Is this figure stated in the answer, in any formatting?
 
-    Compares VALUES, not strings. Gold asks for 150.00; the vendor spreadsheet stores
-    150 and the answer faithfully says "$150", which a string match scores as a miss -
-    penalising the system for not padding a figure the source document never padded.
-    Non-numeric entities fall back to a plain substring test.
-
-    Written after C2 failed on exactly this. Loosening gold in response to a failure
-    is how an eval gets quietly gamed, so the rule to keep is: fix the COMPARISON when
-    it was measuring the wrong thing, never the expectation. The figure a reviewer
-    would check by hand is unchanged - 150 is still required to appear.
+    Compares values, not strings: gold asks for 150.00, the sheet stores 150 and the
+    answer says "$150". A string match would penalise the system for not padding a
+    figure the document never padded. Non-numeric entities fall back to substring.
     """
     target = NUMBER.fullmatch(entity.replace(",", ""))
     if not target:
@@ -56,13 +47,11 @@ def entity_present(entity: str, answer: str) -> bool:
 
 
 def attribute(trace: QueryTrace, case: dict) -> str:
-    """Which stage is responsible for this case not matching gold. Earliest wins.
+    """Which stage is responsible for this case not matching gold. Earliest wins, so
+    a generation failure caused by a retrieval miss reports as retrieval.
 
-    Earliest-wins matters: a generation failure caused by a retrieval miss is a
-    retrieval failure, and reporting it as generation would send the next engineer
-    to the wrong file. Classification and extraction cannot appear here because the
-    query path does not run them - a wrong document type shows up as a retrieval
-    miss, and the ingest eval is where it gets named.
+    Classification and extraction cannot appear here - the query path does not run
+    them, and the ingest eval is where they get named.
     """
     need = set(case.get("must_retrieve") or [])
     if need - set(trace.retrieved_documents):
@@ -101,8 +90,8 @@ def score(case: dict, trace: QueryTrace, cited: dict[str, dict]) -> Result:
         r.check(f"retrieved {doc}", doc in trace.retrieved_documents,
                 f"retrieved {trace.retrieved_documents}")
 
-    # The access case. This is the one that must never silently pass: a filter that
-    # returned nothing at all would satisfy "refused" while proving nothing.
+    # Must never silently pass: a filter returning nothing at all would satisfy
+    # "refused" while proving nothing.
     for doc in case.get("must_not_retrieve") or []:
         r.check(f"withheld {doc}", doc not in trace.retrieved_documents,
                 f"LEAKED - {doc} reached a principal not cleared for it")
@@ -112,10 +101,9 @@ def score(case: dict, trace: QueryTrace, cited: dict[str, dict]) -> Result:
         for entity in case.get("expect_entities") or []:
             r.check(f"states {entity}", entity_present(entity, answer))
 
-        # Citation support, scored deterministically: every chunk a surviving claim
-        # cites must resolve, and must belong to a document gold accepts as a source
-        # for this question. An ID that resolves to the wrong document is a wrong
-        # citation even when the sentence it supports is true.
+        # Every chunk a surviving claim cites must resolve and belong to a document
+        # gold accepts for this question. An ID resolving to the wrong document is a
+        # wrong citation even when the sentence it supports is true.
         allowed = set(case.get("expect_sources") or [])
         if allowed:
             for claim in trace.kept_claims:
@@ -153,8 +141,7 @@ def score(case: dict, trace: QueryTrace, cited: dict[str, dict]) -> Result:
                 trace.regeneration_count == case["expect_regenerations"],
                 f"regenerated {trace.regeneration_count}x")
 
-    # An unsupported claim that reaches the user is the failure this system exists to
-    # prevent, so it is checked on EVERY case, not only where gold thinks to ask.
+    # Checked on every case, not just where gold thinks to ask.
     r.check("no planted claim in the final answer",
             not any(FAULT_CLAIM in c.text for c in trace.kept_claims))
 

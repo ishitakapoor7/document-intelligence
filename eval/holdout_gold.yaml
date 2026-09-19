@@ -18,18 +18,14 @@ documents:
     document_type: invoice
     fields:
       invoice_number: {value: "1179"}
-      # The letterhead reads "Arista Laboratories". The archive's own OCR text layer
-      # reads "Uristo" - a wrong vendor name sitting in the text the pipeline will
-      # consume. Gold records what the PAGE says.
+      # The letterhead reads "Arista Laboratories"; the archive's own OCR reads
+      # "Uristo". Gold records what the page says.
       vendor_name:    {value: "Arista Laboratories"}
       invoice_date:   {value: "2005-01-31"}
-      # TIGHTENED when the amendment policy was adopted. The printed P.O. 8500005968
-      # is struck through; the handwritten 850001215 below it is struck through too;
-      # 85000 14180 is handwritten above the table and is NOT struck. Under the
-      # policy - a struck value is retired, the survivor is the answer - this field
-      # has one correct value rather than a defensible range, so null is no longer
-      # accepted. This is the independent test of that policy: it was written for
-      # G4 and gkdb0226 played no part in writing it.
+      # Printed 8500005968 is struck through; handwritten 850001216 5 below it is
+      # struck through too; 85000 14180 above the table is not. Under the amendment
+      # policy the survivor is the answer. gkdb0226 played no part in writing that
+      # policy, so this is its independent test.
       po_reference:   {value: "8500014180"}
       total_amount:   {value: 133337.50}
     line_items:

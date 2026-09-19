@@ -1,19 +1,12 @@
-"""Isolate the citation verifier and measure it directly, N times per claim.
+"""Measure the citation verifier in isolation, N times per claim.
 
-Why this exists: `ask --inject always` kept a fabricated claim that `ask --inject
-once` had stripped minutes earlier. The verifier is a Haiku call with no sampling
-controls, so a single observation says nothing about whether a claim is caught -
-it says what happened once. This probe calls `_verify` in isolation, so a
-measurement costs a fraction of a cent instead of a full query, and reports a rate.
+It is a Haiku call with no sampling controls, so one observation says what happened
+once, not whether a claim is caught. Calling `_verify` directly costs a fraction of a
+cent per measurement instead of a whole query.
 
-Two claims, deliberately chosen to pull in opposite directions:
-
-  SUPPORTED   a genuine cross-document claim. An earlier verifier rejected every
-              claim of this shape and destroyed the product; it must keep passing.
-  FABRICATED  invents a premise (an early-payment discount) that appears nowhere,
-              then computes correctly FROM that invented premise. Must be rejected.
-
-A change that fixes one and breaks the other is not a fix.
+The claims pull in opposite directions - genuine cross-document synthesis that must
+pass, and fabrications that must not - because a change that fixes one and breaks the
+other is not a fix.
 """
 from __future__ import annotations
 
@@ -34,16 +27,14 @@ SUPPORTED_CLAIM = ("The invoiced unit price of $156.00 exceeds the contracted un
                    "of $150.00 by $6.00 per unit, which across 80 units amounts to "
                    "$480.00 in excess billing.")
 
-# Held out. Written AFTER the prompt fix and never used to develop it, because a fix
-# validated only on the example that exposed it measures the fix against its own
-# memory. These two are different shapes: a single-source restatement that must pass,
-# and a fabrication with no arithmetic at all that must fail.
+# Held out: written after the prompt fix and never used to develop it. Two different
+# shapes - a single-source restatement that must pass, and a fabrication with no
+# arithmetic at all that must fail.
 SUPPORTED_HELD_OUT = ("PO-2026-0043 was issued on 2026-02-28 to Acme Industrial Supply Co. "
                       "with a total committed amount of $12,000.00.")
 
-# The hard one. The cited extract SAYS that invoices over the committed amount require
-# a written change order; this claim asserts that one was issued. Every noun in it
-# appears in the source - only the event does not.
+# The hard one: the cited extract says invoices over the committed amount require a
+# change order, so every noun appears in the source. Only the event does not.
 FABRICATED_HELD_OUT = ("Northwind Manufacturing LLC issued a written change order "
                        "authorising the additional amount billed above PO-2026-0043.")
 

@@ -1,8 +1,6 @@
-"""Score classification, OCR routing, extraction and grounding across both sets.
-
-Deterministic: every judgement below is a comparison against hand-authored ground
-truth. No model grades anything here.
-"""
+"""Score classification, OCR routing, extraction and grounding across all three
+document sets. Every judgement is a comparison against hand-authored gold; no model
+grades anything here."""
 from __future__ import annotations
 
 import sys
@@ -52,8 +50,7 @@ class Tally:
         return sum(1 for r in self.rows if r[2] == verdict)
 
 
-# What this run has cost so far. Printed at the end, because a number you only
-# discover on the invoice is not a number anybody can act on.
+# Printed at the end: a cost you only discover on the invoice is not actionable.
 SPEND: list[float] = []
 
 
@@ -79,11 +76,9 @@ def evaluate(gold_path: Path, doc_dir: Path, label: str,
         doc = outcome.document
         got = {f.name: f for f in (doc.fields if doc else [])}
 
-        # A document the taxonomy genuinely cannot label - a packet holding several
-        # unrelated records - has more than one defensible answer, and picking one
-        # arbitrarily would score a reasonable reading as a failure. Where gold says
-        # so, any listed label passes and the document-level verdict is carried by
-        # the schema-mismatch row instead.
+        # A packet the taxonomy cannot label has more than one defensible answer.
+        # Where gold says so, any listed label passes and the document-level verdict
+        # is carried by the schema-mismatch row.
         any_types = expected.get("expect_document_type_any_of")
         if any_types:
             exp_type = " | ".join(any_types)
@@ -152,9 +147,8 @@ def evaluate(gold_path: Path, doc_dir: Path, label: str,
         # a schema that cannot represent the document is recorded as such, not as a pass
         mrm = expected.get("multi_record_schema_mismatch")
         if mrm:
-            # The description comes from gold, not from here. It used to be hardcoded
-            # for the one spreadsheet that first showed the problem, and then printed
-            # "3 suppliers present" underneath a 7-page accounts-payable packet.
+            # Description comes from gold: hardcoding it here printed "3 suppliers"
+            # under a 7-page accounts-payable packet.
             detail = mrm if isinstance(mrm, str) else "several records, one representable"
             tally.add(name, "__multi_record__", "schema_mismatch", detail.strip())
             print(f"  ~   MULTI-RECORD SCHEMA MISMATCH: {detail.strip()}")
@@ -218,11 +212,8 @@ def summarise(tally: Tally, label: str) -> None:
 
 
 def degraded_table(paths: list[Path]) -> None:
-    """The recognition ladder, end to end, with and without the vision fallback.
-
-    The paired rows are the point: the same bytes, the same thresholds, and the only
-    difference is whether the escalation was allowed to fire.
-    """
+    """The recognition ladder with and without the vision fallback. Same bytes, same
+    thresholds; the only variable is whether escalation was allowed to fire."""
     print(f"\n{'=' * 116}\nDEGRADED-CASE LADDER\n{'=' * 116}")
     hdr = (f"{'document':<32}{'fb?':<5}{'class':<16}{'tess':>6}{'post':>7}"
            f"{'decision':>30}{'missing':>18}{'cost':>9}{'lat':>6}")
@@ -245,10 +236,8 @@ def degraded_table(paths: list[Path]) -> None:
     print("  comparable to the Tesseract column, which is a measured classifier score.")
 
 
-# Every run of this file spends real money - it re-reads each document through the
-# live model path on purpose, because the point is to measure the system as it runs.
-# So the sets are selectable and the ladder is opt-in: the default should be the
-# thing you most often want, not the most expensive thing available.
+# Every run spends real money - each document goes through the live model path, which
+# is the point. Sets are selectable and the ladder is opt-in.
 SETS = {
     "controlled":  (GOLD_CONTROLLED, ROOT / "corpus",
                     "CONTROLLED FIXTURES (written alongside the schemas)", "CONTROLLED"),

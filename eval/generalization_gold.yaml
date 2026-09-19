@@ -84,18 +84,10 @@ documents:
       Scanned, with a handwritten amendment striking through the printed order value
       and writing a different figure above it. A system that silently merges the two,
       or that returns the value the document crossed out, is wrong.
-    # GOLD REVERSED - by a policy decision, not by a result.
-    #
-    # This expected 18750.00 (the printed figure) on the grounds that the handwritten
-    # amendment is uncountersigned while the document's own footer says amendments
-    # must be countersigned. The product owner has decided the opposite rule: a struck
-    # value has been retired by the document, and the surviving value beside it is
-    # what the document now asserts. Expected is therefore 19400.00.
-    #
-    # Recording why the distinction matters: gold may be changed by a decision about
-    # what the right answer IS, and must never be changed to match what the system
-    # happened to output. The earlier reading is still defensible - see
-    # eval/holdout_findings.md - and it lost on a judgement call, not on evidence.
+    # Gold reversed by a policy decision, not by a result: a struck value is retired
+    # and the survivor is what the document asserts, so 19400.00 rather than the
+    # printed 18750.00. The earlier reading - the amendment is uncountersigned, so the
+    # printed figure stands - is defensible and lost on a judgement call.
     expect_document_type: purchase_order
     expect_file_type: pdf_scanned
     fields:
@@ -131,19 +123,11 @@ documents:
     expect_document_type: vendor_record
     expect_file_type: xlsx
     expect_status: needs_review_missing_fields
-    # An earlier version of this gold accepted "any one of the three suppliers" as a
-    # pass. That was wrong: returning one arbitrary row is not a correct answer,
-    # because a consumer would believe the workbook describes a single supplier at
-    # that rate. The required outcome is to decline to pick, leave the required fields
-    # empty, and route to human review with the classification preserved.
-    #
-    # CORRECTION. This comment used to read "the right outcome is what the pipeline
-    # now does", citing the behaviour as evidence that the design was right. It was
-    # not: nothing in the extraction prompt asked the model to decline, and a later
-    # run picked row 1 on 5 of 5 attempts - three invented values at status=extracted,
-    # with no flag. An observation had been promoted to a design claim. The prompt now
-    # states the multi-instance policy explicitly (docint/understand.py), and declining
-    # is measured at 5/5 rather than assumed.
+    # Returning one arbitrary row is not a partial answer: a consumer would believe
+    # the workbook describes a single supplier at that rate. Required outcome is to
+    # decline, leave the fields empty, and route to review with the type preserved.
+    # The policy is stated in the extraction prompt rather than assumed - see
+    # eval/holdout_findings.md.
     fields:
       vendor_id:               {must_be_null: "three candidate suppliers; picking one arbitrarily is fabrication"}
       vendor_name:             {must_be_null: "three candidate suppliers"}
