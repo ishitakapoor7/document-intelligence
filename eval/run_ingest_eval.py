@@ -139,10 +139,14 @@ def evaluate(gold_path: Path, doc_dir: Path, label: str) -> tuple[Tally, list[st
                       + (f"   WRONG: {bad}" if bad else ""))
 
         # a schema that cannot represent the document is recorded as such, not as a pass
-        if expected.get("multi_record_schema_mismatch"):
-            tally.add(name, "__multi_record__", "schema_mismatch",
-                      "sheet holds 3 suppliers; schema describes 1; 2 silently discarded")
-            print("  ~   MULTI-RECORD SCHEMA MISMATCH: 3 suppliers present, 1 representable")
+        mrm = expected.get("multi_record_schema_mismatch")
+        if mrm:
+            # The description comes from gold, not from here. It used to be hardcoded
+            # for the one spreadsheet that first showed the problem, and then printed
+            # "3 suppliers present" underneath a 7-page accounts-payable packet.
+            detail = mrm if isinstance(mrm, str) else "several records, one representable"
+            tally.add(name, "__multi_record__", "schema_mismatch", detail.strip())
+            print(f"  ~   MULTI-RECORD SCHEMA MISMATCH: {detail.strip()}")
 
         if expected.get("consistency_requirement") and got:
             chunks = {f.chunk_id for f in got.values()}

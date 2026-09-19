@@ -89,3 +89,23 @@ asserting that the system either catches it or is recorded as having missed it. 
 not to pass - a system that cannot catch this should report that it cannot.
 
 This is listed in the README as the first thing to add, ahead of corpus size.
+
+
+---
+
+## FALSIFIED by an external document (added after the holdout run)
+
+The finding above - that on this corpus OCR confidence tracked correctness, with no
+observed band where confidence was high and a value silently wrong - does not survive
+contact with a real scan.
+
+`eval/holdouts/gkdb0226.pdf`, a 2005 laboratory invoice, is read by Tesseract at
+**90.1** - above both thresholds, no flag, no escalation - with two required fields
+lost and the vendor name wrong ("Marista" for a letterhead reading "Arista").
+
+The original statement was scoped to this corpus and remains true of it. The
+generalisation it invited is false, and the thresholds on this page are calibrated
+against a corpus that does not contain this failure mode. See
+`eval/holdout_findings.md`, which also records the bigger problem the same document
+exposed: an inherited OCR text layer that caused the recognition ladder to be skipped
+entirely.

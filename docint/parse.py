@@ -24,6 +24,7 @@ from PIL import Image
 
 from docint.config import (
     MIN_TEXT_LAYER_CHARS,
+    RASTER_PAGE_COVERAGE,
     OCR_RENDER_DPI,
     access_tag_for,
 )
@@ -84,6 +85,29 @@ def ocr_page(page: pymupdf.Page) -> tuple[str, float]:
 # PDF
 # --------------------------------------------------------------------------- #
 
+def raster_coverage(page) -> float:
+    """Fraction of the page covered by its largest raster image.
+
+    The largest rather than the sum, because overlapping images would otherwise
+    total more than the page. This is how a scan is recognised even when it carries
+    an inherited text layer - see RASTER_PAGE_COVERAGE in config.
+    """
+    images = page.get_images(full=True)
+    if not images:
+        return 0.0
+    area = page.rect.width * page.rect.height
+    if area <= 0:
+        return 0.0
+    largest = 0.0
+    for image in images:
+        try:
+            bbox = page.get_image_bbox(image)
+        except (ValueError, RuntimeError):     # malformed or unplaceable image
+            continue
+        largest = max(largest, abs(bbox.width * bbox.height))
+    return largest / area
+
+
 def parse_pdf(path: Path, doc_hash: str, access_tag: str) -> tuple[list[Chunk], FileType, float | None, int]:
     """One chunk per page. Each page independently takes the text-layer or OCR path.
 
@@ -103,7 +127,12 @@ def parse_pdf(path: Path, doc_hash: str, access_tag: str) -> tuple[list[Chunk], 
             text = page.get_text().strip()
             confidence: float | None = None
 
-            if len(text) < MIN_TEXT_LAYER_CHARS:
+            # Two ways a page earns OCR: it has almost no text, or it is a raster
+            # scan that merely came with text attached. In the second case the
+            # inherited layer is DISCARDED rather than merged - a value this system
+            # asserts should be one it measured the reading of, and text of unknown
+            # provenance carries no confidence to attach to a citation.
+            if len(text) < MIN_TEXT_LAYER_CHARS or raster_coverage(page) >= RASTER_PAGE_COVERAGE:
                 text, confidence = ocr_page(page)
                 used_ocr = True
                 ocr_confidences.append(confidence)

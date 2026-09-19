@@ -48,6 +48,22 @@ MIN_CLASSIFY_CONFIDENCE = 0.60
 # scan and sent through OCR. The demo invoice page has 507; the scanned PO has 0.
 MIN_TEXT_LAYER_CHARS = 100
 
+# ...but a text layer is NOT evidence that a page was born digital, and treating it
+# that way was a hole straight through the middle of this system. Archived business
+# documents are overwhelmingly scans that somebody else already ran OCR over, and
+# that inherited layer arrives with no confidence signal, no provenance and no
+# guarantee of accuracy. Every page of all three external holdouts is a full-page
+# raster image with such a layer on top; each was labelled `pdf_digital`, so
+# Tesseract never ran, no confidence was ever measured, the review gate could not
+# fire and the vision fallback was unreachable. One was extracted at full confidence
+# with the vendor name wrong, because the inherited layer read "Arista
+# Laboratories" as "Uristo".
+#
+# A page whose area is essentially covered by a raster image is a scan, whatever
+# text rides along with it. That is a structural fact about the page rather than a
+# guess about its text, so it holds for documents nobody here has seen.
+RASTER_PAGE_COVERAGE = 0.80
+
 # Retrieval. top_k is generous because the corpus is small - at three documents this
 # returns most of it, which is why retrieval quality is not yet a variable here.
 RETRIEVAL_TOP_K = 8
