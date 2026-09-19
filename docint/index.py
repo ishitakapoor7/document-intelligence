@@ -83,13 +83,14 @@ def to_text_node(chunk: Chunk) -> TextNode:
         "access_tag": chunk.access_tag,
         "location": chunk.source_location.render(),
         "location_kind": chunk.source_location.kind,
+        "recognition": chunk.recognition,
         "page": chunk.source_location.page if chunk.source_location.page is not None else -1,
         "sheet": chunk.source_location.sheet or "",
         "cell_range": chunk.source_location.cell_range or "",
         "ocr_confidence": chunk.ocr_confidence if chunk.ocr_confidence is not None else -1.0,
     }
     excluded = ["access_tag", "document_id", "location_kind", "page", "sheet",
-                "cell_range", "ocr_confidence", "file_type"]
+                "cell_range", "ocr_confidence", "file_type", "recognition"]
     return TextNode(
         id_=chunk.chunk_id,
         text=chunk.text,
@@ -108,6 +109,16 @@ def open_index(persist_dir: Path | None = None) -> VectorStoreIndex:
     store = ChromaVectorStore(chroma_collection=client.get_or_create_collection("docint"))
     return VectorStoreIndex.from_vector_store(
         store, storage_context=StorageContext.from_defaults(vector_store=store))
+
+
+def delete_chunks(index: VectorStoreIndex, chunk_ids: list[str]) -> int:
+    """Drop chunks by id. Called before re-indexing a file whose contents changed:
+    new content yields new chunk ids, so the previous ones would otherwise stay in the
+    store and remain retrievable."""
+    if not chunk_ids:
+        return 0
+    index.vector_store.client.delete(ids=chunk_ids)
+    return len(chunk_ids)
 
 
 def upsert(index: VectorStoreIndex, chunks: list[Chunk]) -> int:

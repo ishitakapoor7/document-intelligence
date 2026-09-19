@@ -99,11 +99,20 @@ def escalate(path, chunks: list) -> tuple[list, float, float, float]:
             chunk = by_page.get(page_index + 1)
             if chunk is None:
                 continue
+            # Only pages that went through OCR are re-read. A mixed PDF - a born-digital
+            # cover in front of scanned attachments - would otherwise have its good text
+            # replaced by a transcription, at a cost per page.
+            if chunk.recognition == "text_layer":
+                updated.append(chunk)
+                continue
             text, legibility, c, t = transcribe(page)
             scores.append(legibility)
             cost += c
             latency += t
-            updated.append(chunk.model_copy(update={"text": text, "ocr_confidence": legibility}))
+            # The measured Tesseract confidence is preserved. A model's own legibility
+            # rating is not a measurement and does not belong in the field that
+            # citations display as OCR confidence.
+            updated.append(chunk.model_copy(update={"text": text, "recognition": "vision"}))
     finally:
         pdf.close()
 

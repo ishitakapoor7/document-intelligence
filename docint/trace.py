@@ -5,6 +5,7 @@ is no second account of what happened that could disagree.
 """
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
 
 from docint.config import RUNS_DIR
@@ -28,6 +29,23 @@ def load(trace_id: str) -> QueryTrace:
     return QueryTrace.model_validate_json(trace_path(trace_id).read_text())
 
 
+def describe_recognition(recognition: str, ocr_confidence: float | None) -> str:
+    """How this text was read, for display beside a citation. Vision-read text never
+    borrows the word "ocr": the only measured number for such a page is the Tesseract
+    pass that triggered the escalation."""
+    if recognition == "vision":
+        measured = f", tesseract read it {ocr_confidence:.1f}" if ocr_confidence is not None else ""
+        return f"vision re-read{measured}"
+    if recognition == "tesseract" and ocr_confidence is not None:
+        return f"ocr {ocr_confidence:.1f}"
+    return "digital text layer"
+
+
+def _wrap(text: str, width: int = 88, indent: str = "  ") -> str:
+    return textwrap.fill(text, width=width, initial_indent=indent,
+                         subsequent_indent=indent)
+
+
 def render(trace: QueryTrace) -> str:
     """The terminal view of a trace, rendered entirely from the JSON."""
     out: list[str] = []
@@ -49,24 +67,44 @@ def render(trace: QueryTrace) -> str:
                if rnd.invalid_citations else ""))
         for s in rnd.stripped:
             add(f"    {BOLD}STRIPPED{RESET}  {s.text}")
-            add(f"              {DIM}{s.reason}{RESET}")
+            # Verdicts run to several paragraphs and would swamp the answer. The
+            # full reasoning is in the trace JSON.
+            reason = " ".join(s.reason.split())
+            if len(reason) > 180:
+                reason = reason[:177] + "..."
+            add(f"              {DIM}{reason}{RESET}")
 
     if trace.regeneration_count:
         add(f"  {DIM}regenerated {trace.regeneration_count}x with the rejection reasons "
             f"fed back{RESET}")
 
     if trace.final_status == "answered":
-        add(f"\n{BOLD}ANSWER{RESET}\n  {trace.final_answer}")
-        add(f"\n  {len(trace.kept_claims)} verified claim(s):")
+        # Numbered markers are a display convenience only. The trace, the citations
+        # and `docint show` all address chunks by their real id; the numbers exist so
+        # a claim reads like a sentence with a footnote rather than a hash.
+        number = {c.chunk_id: i for i, c in enumerate(trace.final_citations, start=1)}
+
+        # The answer is built from the verified claims, not from the model's prose.
+        # Each sentence carries the reference it survived verification against, and
+        # nothing unverified appears above the references. The original prose stays
+        # in the trace as `final_answer`.
+        add(f"\n{BOLD}ANSWER{RESET}")
+        cited = []
         for claim in trace.kept_claims:
-            add(f"    · {claim.text}")
-            add(f"      {DIM}{' '.join(claim.cited_chunk_ids)}{RESET}")
-        add(f"\n  citations:")
+            marks = "".join(f"({number[cid]})" for cid in claim.cited_chunk_ids
+                            if cid in number)
+            cited.append(f"{claim.text.rstrip()} {marks}")
+        add(_wrap(" ".join(cited)))
+
+        add(f"\n{BOLD}REFERENCES{RESET}")
         for c in trace.final_citations:
-            conf = f"  ocr {c.ocr_confidence:.1f}" if c.ocr_confidence is not None else "  digital"
-            add(f"    {c.chunk_id}  {c.filename} · {c.location}{DIM}{conf}{RESET}")
+            add(f"  ({number[c.chunk_id]})  {c.filename} · {c.location}"
+                f"{DIM}   {c.chunk_id}  ·  {describe_recognition(c.recognition, c.ocr_confidence)}{RESET}")
     else:
-        add(f"\n{BOLD}{trace.final_status.upper()}{RESET}\n  {trace.refusal_reason}")
+        add(f"\n{BOLD}{trace.final_status.upper()}{RESET}")
+        for para in (trace.refusal_reason or "").split("\n\n"):
+            if para.strip():
+                add(_wrap(para.strip()))
 
     add(f"\n{DIM}  ${trace.total_cost_usd:.4f}  ·  {trace.total_latency_s:.1f}s  ·  "
         f"trace {trace.trace_id}{RESET}\n")

@@ -82,11 +82,15 @@ document, and is marked there.
 requests, two cheque stubs, correspondence, and one genuine invoice on page 3.
 `lmcj0190` is a returned-goods form and a freight bill.
 
-The data model assumes one file is one document is one record: `document_id` hashes
-the file, `document_type` is one label, the field set holds one record. Nothing can
-represent a bundle. This is the multi-record problem one level up from a spreadsheet
-holding three suppliers, and it is far more common in real archives than in anything
-I would have thought to synthesise.
+The data model assumes one file is one document is one record: `document_id`
+addresses a whole file, `document_type` is one label, the field set holds one record.
+Nothing can represent a bundle. This is the multi-record problem one level up from a
+spreadsheet holding three suppliers, and it is far more common in real archives than
+in anything I would have thought to synthesise.
+
+The product is therefore scoped to single-record documents, and packets are scored as
+schema mismatches rather than passes. Segmentation is the first thing it needs before
+it meets a real archive.
 
 What the system does with them is better than the architecture deserves: `lmcj0190`
 is correctly `unknown` despite the freight bill's "TOTAL CHARGES (USD)" column, and

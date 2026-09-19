@@ -7,3 +7,4 @@ runs/chroma/
 runs/*.json
 .pytest_cache/
 .DS_Store
+Makefile

@@ -21,7 +21,8 @@ from docint.config import (
     required_fields,
 )
 from docint.models import Chunk, Document, IngestOutcome, ManifestEntry
-from docint.parse import UnsupportedFileType, content_hash, finalize_chunks, parse
+from docint.parse import (UnsupportedFileType, content_hash, finalize_chunks, parse,
+                          source_id)
 from docint.understand import classify, extract
 
 
@@ -45,11 +46,19 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
     path = Path(path)
     started = time.perf_counter()
 
-    # 1. Content hash first: an unchanged file short-circuits every model call below.
+    # 1. Identity is the source file; the content hash is its version. An unchanged
+    #    version short-circuits every model call below. A CHANGED one must first have
+    #    its previous chunks deleted - new content yields new chunk ids, so upsert
+    #    alone would leave the old ones in the store, still retrievable.
     digest = content_hash(path)
-    if not force and digest in manifest:
-        return IngestOutcome(status="unchanged", detail=manifest[digest].document_id,
-                             remembered=manifest[digest])
+    source = source_id(path)
+    previous = manifest.get(source)
+    if not force and previous is not None and previous.content_hash == digest:
+        return IngestOutcome(status="unchanged", detail=previous.document_id,
+                             remembered=previous)
+    if index is not None and previous is not None and previous.content_hash != digest:
+        from docint.index import delete_chunks
+        delete_chunks(index, previous.chunk_ids)
 
     # 2. Parse. Locations attached in-loop; IDs from content hash + location.
     try:
@@ -71,11 +80,13 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
     document.document_type, document.classification_confidence = classify(chunks)
     chunks = finalize_chunks(chunks, document)
 
-    # 5. Quality floor, on the effective confidence (i.e. after any fallback). Runs
-    #    before the `unknown` short-circuit: "we cannot identify this" is a conclusion
-    #    drawn from text, and is not available when the text cannot be read.
+    # 5. Quality floor, on the MEASURED confidence, before the `unknown`
+    #    short-circuit: "we cannot identify this" is drawn from text we could not read.
+    #    A vision pass does not lift the floor by rating its own output well; what it
+    #    can do is yield the required fields, which 6b checks against the schema.
     effective = document.ocr_mean_confidence
-    if effective is not None and effective < MIN_OCR_CONFIDENCE:
+    if (effective is not None and effective < MIN_OCR_CONFIDENCE
+            and not document.ocr.fallback_used):
         document.status = "needs_review_ocr"
         document.review_reason = (
             f"recognition confidence {effective:.1f} is below the {MIN_OCR_CONFIDENCE:.0f} "
@@ -86,8 +97,13 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
         return _finish(manifest, document, chunks, started, index)
 
     if document.document_type == "unknown":
-        document.status = "unknown_type"
+        unreadable = effective is not None and effective < MIN_OCR_CONFIDENCE
+        document.status = "needs_review_ocr" if unreadable else "unknown_type"
         document.review_reason = (
+            f"measured recognition confidence {effective:.1f} is below the "
+            f"{MIN_OCR_CONFIDENCE:.0f} threshold, and no configured type fits; the "
+            f"document could not be read well enough to identify"
+            if unreadable else
             f"classification confidence {document.classification_confidence:.2f} below "
             f"threshold, or no configured type fits; no schema to extract against")
         return _finish(manifest, document, chunks, started, index)
@@ -110,16 +126,6 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
         document.fields, document.line_items = fields, line_items
         document.extraction_cost_usd += cost
         missing = _missing_required(document)
-
-        # A better transcription can reveal the page was worse than Tesseract said.
-        effective = document.ocr_mean_confidence
-        if effective is not None and effective < MIN_OCR_CONFIDENCE:
-            document.status = "needs_review_ocr"
-            document.review_reason = (
-                f"required field(s) {', '.join(document.missing_before_escalation)} were "
-                f"missing, so the page was re-read with vision; legibility came back "
-                f"{effective:.1f}, below the {MIN_OCR_CONFIDENCE:.0f} threshold.")
-            return _finish(manifest, document, chunks, started, index)
 
     # 7. A required field we could not read is a review item, not a silent gap. The
     #    classification is preserved so a reviewer knows what they are looking at.
@@ -166,10 +172,12 @@ def _finish(manifest, document: Document, chunks: list[Chunk], started: float,
         from docint.index import upsert
         upsert(index, chunks)
     document.total_latency_s = time.perf_counter() - started
-    manifest[document.content_hash] = ManifestEntry(
+    manifest[document.source_id] = ManifestEntry(
+        source_id=document.source_id,
         content_hash=document.content_hash,
         document_id=document.document_id,
         filename=document.filename,
+        access_tag=document.access_tag,
         document_type=document.document_type,
         chunk_ids=[c.chunk_id for c in chunks],
         ingested_at=datetime.now(timezone.utc),

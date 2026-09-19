@@ -16,12 +16,27 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from docint.answer import FAULT_CLAIM, _verify
-from docint.index import get_chunks
+from docint.index import get_chunks, open_index
 
-INVOICE_CHUNK = "afbb2080425f05a5"
-VENDOR_CHUNK = "42e12b19472785e8"
+def chunk_at(filename: str, location: str) -> str:
+    """Resolve a chunk by where it lives rather than by a pasted id.
 
-PO_CHUNK = "7b27e54621ffa38d"
+    Chunk ids are derived from source, content hash and location, so they move
+    whenever the corpus is re-authored. Looking them up keeps this probe working
+    across that.
+    """
+    store = open_index().vector_store.client
+    got = store.get(where={"$and": [{"filename": {"$eq": filename}},
+                                    {"location": {"$eq": location}}]})
+    if not got["ids"]:
+        raise SystemExit(f"no chunk for {filename} {location} - run `docint ingest corpus/` first")
+    return got["ids"][0]
+
+
+INVOICE_CHUNK = chunk_at("invoice_acme_001.pdf", "p. 1")
+VENDOR_CHUNK = chunk_at("vendor_records.xlsx", "Vendors!A4:B9")
+
+PO_CHUNK = chunk_at("po_acme_001.pdf", "p. 1")
 
 SUPPORTED_CLAIM = ("The invoiced unit price of $156.00 exceeds the contracted unit price "
                    "of $150.00 by $6.00 per unit, which across 80 units amounts to "

@@ -56,13 +56,13 @@ def test_chunk_id_ignores_text_so_ocr_drift_cannot_move_it():
     stability matters most.
     """
     location = SourceLocation(kind="pdf_page", page=1)
-    assert make_chunk_id("abc123", location) == make_chunk_id("abc123", location)
+    assert make_chunk_id("s", "abc123", location) == make_chunk_id("s", "abc123", location)
     # different location -> different id
-    assert make_chunk_id("abc123", location) != make_chunk_id(
-        "abc123", SourceLocation(kind="pdf_page", page=2)
+    assert make_chunk_id("s", "abc123", location) != make_chunk_id(
+        "s", "abc123", SourceLocation(kind="pdf_page", page=2)
     )
     # different document -> different id
-    assert make_chunk_id("abc123", location) != make_chunk_id("def456", location)
+    assert make_chunk_id("s", "abc123", location) != make_chunk_id("s", "def456", location)
 
 
 def test_access_tags_come_from_config_not_the_file():
@@ -75,9 +75,12 @@ def test_unsupported_format_is_a_typed_failure():
         parse(ROOT / "requirements.txt")
 
 
-def test_effective_confidence_reflects_the_fallback():
-    """ocr_mean_confidence is a property over telemetry, so 'how well was this read'
-    has exactly one answer and cannot drift from the numbers it derives from."""
+def test_measured_confidence_never_reports_the_models_self_rating():
+    """ocr_mean_confidence is Tesseract's measured score and nothing else.
+
+    A vision model's opinion of its own reading is not a measurement, and must not be
+    the number that authorizes extraction or gets displayed beside a citation.
+    """
     from docint.models import Document, OcrTelemetry
 
     doc = Document(document_id="d", filename="f.pdf", file_type="pdf_scanned",
@@ -87,4 +90,5 @@ def test_effective_confidence_reflects_the_fallback():
 
     doc.ocr = OcrTelemetry(tesseract_confidence=43.4, fallback_used=True,
                            fallback_route="claude", post_fallback_confidence=88.0)
-    assert doc.ocr_mean_confidence == 88.0
+    assert doc.ocr_mean_confidence == 43.4
+    assert doc.ocr.post_fallback_confidence == 88.0

@@ -18,11 +18,24 @@ not a product: three document types, one folder, one machine.
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 brew install tesseract && cp .env.example .env   # add your ANTHROPIC_API_KEY
-make demo
+
+python -m docint.cli doctor          # tesseract, API key, index state
+python -m docint.cli ingest corpus/  # parse, classify, extract - run it twice
+python -m docint.cli ask "Did Acme bill us above their contracted rate on INV-2026-0117, and does the invoice stay within what PO-2026-0043 committed?"
 ```
 
-`make doctor` checks the environment first; `make help` lists every command with its
-cost. Nothing else needs a service or a database.
+The second `ingest` prints `3 unchanged` and makes no model calls. The answer cites a
+chunk id per claim; `docint show <chunk_id>` prints the page or cell it came from, and
+`docint review` lists anything waiting on a human. Nothing needs a service or a
+database.
+
+Evaluation, which makes live model calls:
+
+```bash
+python eval/run_ingest_eval.py   # ingestion, 14 documents across 3 sets  (~$1.20)
+python eval/harness.py           # query path, 7 cases -> runs/report.md  (~$0.50)
+python -m pytest tests/ -q       # 21 unit tests, offline
+```
 
 ## Architecture
 
@@ -70,12 +83,13 @@ cost. Nothing else needs a service or a database.
   remaining extraction error on real external documents is an abstention, not a
   wrong answer.
 
-- **Known limitation.** The data model assumes one file is one document is one
-  record. Two of the three external holdouts are multi-document packets — a 7-page
-  accounts-payable bundle holding three unrelated payment matters, and a freight/
-  returns packet — and nothing in the schema can represent them. Document
-  completeness on real external documents is **1 in 3**. Fourteen documents is also
-  far too small a sample for any figure above to be read as a rate.
+- **Known limitation.** Scope is **single-record documents** — one file, one
+  invoice or purchase order or vendor record. It does not segment packets, and
+  packets are not rare: two of the three external holdouts are multi-document files.
+  The eval scores those as schema mismatches rather than passes, which is why
+  document completeness on real external documents is **1 in 3**. Segmentation comes
+  before this meets an archive. Fourteen documents is too small a sample for any
+  figure above to be read as a rate.
 
 ## Detail
 

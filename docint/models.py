@@ -55,7 +55,12 @@ class Chunk(BaseModel, frozen=True):
     access_tag: str
     text: str
     source_location: SourceLocation
-    ocr_confidence: float | None = None   # None => came from a real text layer
+    # How this text was produced, and the MEASURED confidence of reading it.
+    # `ocr_confidence` is always Tesseract's per-word score; a vision model has no
+    # equivalent, so a vision-read chunk keeps the measured score of the Tesseract
+    # pass that triggered it and is distinguished by `recognition`.
+    recognition: Literal["text_layer", "tesseract", "vision"] = "text_layer"
+    ocr_confidence: float | None = None
 
     def render_source(self) -> str:
         return f"{self.filename} - {self.source_location.render()}"
@@ -115,6 +120,7 @@ class Document(BaseModel):
     """One ingested file."""
 
     document_id: str                       # doc_<first 12 of content_hash>
+    source_id: str = ""                    # stable per FILE, independent of bytes
     filename: str
     file_type: FileType
     content_hash: str
@@ -145,20 +151,29 @@ class Document(BaseModel):
 
     @property
     def ocr_mean_confidence(self) -> float | None:
-        """Effective confidence: the fallback's figure when one was used. A property
-        so it cannot drift from the telemetry it derives from."""
-        if self.ocr.fallback_used and self.ocr.post_fallback_confidence is not None:
-            return self.ocr.post_fallback_confidence
+        """The MEASURED recognition confidence - Tesseract's, always.
+
+        The vision model's self-rating is deliberately not returned here. It is not a
+        measurement, and a model's opinion of its own reading must not be what
+        authorizes extraction from that reading. It stays in
+        `ocr.post_fallback_confidence`, labelled model-graded wherever it is shown.
+        """
         return self.ocr.tesseract_confidence
 
 
 class ManifestEntry(BaseModel):
-    """Proof that a byte-sequence was already ingested. Keyed by content hash, so an
-    unchanged file is detected before any parsing, OCR or model call."""
+    """What is currently indexed for one source file.
 
+    Keyed by source_id, not content hash: the same bytes under two access tags are two
+    documents, and a file whose contents change is the same document at a new version.
+    The stored content_hash is what makes an unchanged file free to re-ingest.
+    """
+
+    source_id: str = ""
     content_hash: str
     document_id: str
     filename: str
+    access_tag: str = ""
     document_type: DocumentType
     chunk_ids: list[str]
     ingested_at: datetime
@@ -222,6 +237,7 @@ class Citation(BaseModel):
     filename: str
     location: str
     document_type: DocumentType
+    recognition: Literal["text_layer", "tesseract", "vision"] = "text_layer"
     ocr_confidence: float | None = None
 
     def render(self) -> str:

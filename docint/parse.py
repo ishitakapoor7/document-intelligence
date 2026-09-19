@@ -23,6 +23,7 @@ from openpyxl.utils import get_column_letter
 from PIL import Image
 
 from docint.config import (
+    ROOT,
     MIN_TEXT_LAYER_CHARS,
     RASTER_PAGE_COVERAGE,
     OCR_RENDER_DPI,
@@ -43,9 +44,23 @@ def content_hash(path: Path) -> str:
     return h.hexdigest()
 
 
-def make_chunk_id(doc_content_hash: str, location: SourceLocation) -> str:
+def source_id(path) -> str:
+    """Stable identity for a FILE, independent of its bytes.
+
+    Identity cannot be content alone. The same bytes filed under two access tags are
+    two documents with two ACLs, and a file whose contents change is the same document
+    at a new version - both of which a pure content hash collapses.
+    """
+    path = Path(path)
+    try:
+        return str(path.resolve().relative_to(ROOT))
+    except ValueError:
+        return str(path.resolve())
+
+
+def make_chunk_id(source: str, doc_content_hash: str, location: SourceLocation) -> str:
     return hashlib.sha256(
-        f"{doc_content_hash}|{location.canonical()}".encode()
+        f"{source}|{doc_content_hash}|{location.canonical()}".encode()
     ).hexdigest()[:16]
 
 
@@ -104,7 +119,7 @@ def raster_coverage(page) -> float:
     return largest / area
 
 
-def parse_pdf(path: Path, doc_hash: str, access_tag: str) -> tuple[list[Chunk], FileType, float | None, int]:
+def parse_pdf(path: Path, source: str, doc_hash: str, access_tag: str) -> tuple[list[Chunk], FileType, float | None, int]:
     """One chunk per page, each taking the text-layer or OCR path independently.
 
     Per page, not per file: real PDFs mix born-digital covers with scanned
@@ -120,6 +135,7 @@ def parse_pdf(path: Path, doc_hash: str, access_tag: str) -> tuple[list[Chunk], 
             page_number = page_index + 1
             text = page.get_text().strip()
             confidence: float | None = None
+            recognition = "text_layer"
 
             # Two ways to earn OCR: almost no text, or a raster scan that merely came
             # with text attached. The inherited layer is discarded rather than merged -
@@ -128,6 +144,7 @@ def parse_pdf(path: Path, doc_hash: str, access_tag: str) -> tuple[list[Chunk], 
                 text, confidence = ocr_page(page)
                 used_ocr = True
                 ocr_confidences.append(confidence)
+                recognition = "tesseract"
 
             if not text.strip():
                 continue
@@ -135,7 +152,7 @@ def parse_pdf(path: Path, doc_hash: str, access_tag: str) -> tuple[list[Chunk], 
             location = SourceLocation(kind="pdf_page", page=page_number)
             chunks.append(
                 Chunk(
-                    chunk_id=make_chunk_id(doc_hash, location),
+                    chunk_id=make_chunk_id(source, doc_hash, location),
                     document_id=f"doc_{doc_hash[:12]}",
                     document_type="unknown",        # stamped after classification
                     file_type="pdf_scanned" if used_ocr else "pdf_digital",
@@ -143,6 +160,7 @@ def parse_pdf(path: Path, doc_hash: str, access_tag: str) -> tuple[list[Chunk], 
                     access_tag=access_tag,
                     text=text,
                     source_location=location,
+                    recognition=recognition,
                     ocr_confidence=confidence,
                 )
             )
@@ -174,7 +192,7 @@ def _row_blocks(ws) -> list[tuple[int, int]]:
     return blocks
 
 
-def parse_xlsx(path: Path, doc_hash: str, access_tag: str) -> tuple[list[Chunk], FileType, None, int]:
+def parse_xlsx(path: Path, source: str, doc_hash: str, access_tag: str) -> tuple[list[Chunk], FileType, None, int]:
     """One chunk per contiguous row block, located by sheet and cell range.
 
     A block is the natural unit here: a labelled terms section and a line-item
@@ -215,7 +233,7 @@ def parse_xlsx(path: Path, doc_hash: str, access_tag: str) -> tuple[list[Chunk],
             )
             chunks.append(
                 Chunk(
-                    chunk_id=make_chunk_id(doc_hash, location),
+                    chunk_id=make_chunk_id(source, doc_hash, location),
                     document_id=f"doc_{doc_hash[:12]}",
                     document_type="unknown",
                     file_type="xlsx",
@@ -237,18 +255,20 @@ def parse(path: Path) -> tuple[Document, list[Chunk]]:
     """Parse one file into a Document and its located Chunks."""
     path = Path(path)
     doc_hash = content_hash(path)
+    source = source_id(path)
     access_tag = access_tag_for(path)
     suffix = path.suffix.lower()
 
     if suffix == ".pdf":
-        chunks, file_type, mean_conf, unit_count = parse_pdf(path, doc_hash, access_tag)
+        chunks, file_type, mean_conf, unit_count = parse_pdf(path, source, doc_hash, access_tag)
     elif suffix in (".xlsx", ".xlsm"):
-        chunks, file_type, mean_conf, unit_count = parse_xlsx(path, doc_hash, access_tag)
+        chunks, file_type, mean_conf, unit_count = parse_xlsx(path, source, doc_hash, access_tag)
     else:
         raise UnsupportedFileType(f"no parser for {path.suffix!r} ({path.name})")
 
     document = Document(
         document_id=f"doc_{doc_hash[:12]}",
+        source_id=source,
         filename=path.name,
         file_type=file_type,
         content_hash=doc_hash,

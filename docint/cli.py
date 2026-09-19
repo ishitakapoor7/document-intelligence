@@ -142,8 +142,9 @@ def cmd_show(args: argparse.Namespace) -> int:
         print(f"\n  {BOLD}access denied{RESET}  {args.as_profile} is not cleared for this document\n")
         return 3
 
-    conf = (f"ocr {chunk['ocr_confidence']:.1f}" if chunk["ocr_confidence"] >= 0
-            else "born-digital text layer")
+    from docint.trace import describe_recognition
+    conf = describe_recognition(chunk.get("recognition", "text_layer"),
+                                None if chunk["ocr_confidence"] < 0 else chunk["ocr_confidence"])
     print(f"\n  {BOLD}{chunk['filename']} - {chunk['location']}{RESET}")
     print(f"  {DIM}{args.chunk_id}  ·  {chunk['document_type']}  ·  {conf}"
           f"  ·  access_tag {chunk['access_tag']}{RESET}\n")

@@ -227,6 +227,7 @@ def answer_question(question: str, principal: str, access_tags: frozenset[str],
                 Citation(chunk_id=cid, filename=by_id[cid].node.metadata["filename"],
                          location=by_id[cid].node.metadata["location"],
                          document_type=by_id[cid].node.metadata["document_type"],
+                         recognition=by_id[cid].node.metadata.get("recognition", "text_layer"),
                          ocr_confidence=(None if by_id[cid].node.metadata["ocr_confidence"] < 0
                                          else by_id[cid].node.metadata["ocr_confidence"]))
                 for c in kept for cid in c.cited_chunk_ids
