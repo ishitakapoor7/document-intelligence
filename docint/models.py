@@ -1,9 +1,7 @@
-"""Every data model in the system. One file, on purpose.
+"""Every data model, in one file.
 
-The whole pipeline is built on four types: a Document (one file), the Chunks it
-parses into, the Fields extracted from it, and a ManifestEntry recording that it
-was ingested. Everything downstream - retrieval, citation, evaluation - reads
-these and nothing else.
+Four types carry the pipeline: a Document (one file), the Chunks it parses into, the
+Fields extracted from it, and a ManifestEntry recording the ingest.
 """
 from __future__ import annotations
 
@@ -19,9 +17,8 @@ DocumentType = Literal["invoice", "purchase_order", "vendor_record", "unknown"]
 class SourceLocation(BaseModel, frozen=True):
     """Where a chunk came from, precisely enough for a human to go and look.
 
-    Deliberately flat rather than a discriminated union: this doubles as its own
-    vector-store metadata, so there is no to_metadata/from_metadata pair to keep
-    in sync and no round-trip test to guard. Two shapes do not earn a hierarchy.
+    Flat rather than a discriminated union: it doubles as its own vector-store
+    metadata, so there is no to_metadata/from_metadata pair to keep in sync.
     """
 
     kind: Literal["pdf_page", "xlsx_range"]
@@ -36,11 +33,8 @@ class SourceLocation(BaseModel, frozen=True):
         return f"{self.sheet}!{self.cell_range}"
 
     def canonical(self) -> str:
-        """Identity-facing: stable string that feeds the chunk_id hash.
-
-        Distinct from render() because the human form is free to change wording;
-        this one must never change, or every chunk_id in every gold file moves.
-        """
+        """Feeds the chunk_id hash, so it must never change - unlike render(), whose
+        wording is free to."""
         if self.kind == "pdf_page":
             return f"page={self.page}"
         return f"sheet={self.sheet}&cells={self.cell_range}"
@@ -49,9 +43,8 @@ class SourceLocation(BaseModel, frozen=True):
 class Chunk(BaseModel, frozen=True):
     """One retrievable, citable unit of text.
 
-    Document-level facts (type, file type, filename, access tag) are denormalised
-    onto every chunk so that a chunk pulled back out of the vector store is
-    self-describing: filterable, citable and renderable without a second lookup.
+    Document-level facts are denormalised onto every chunk so one pulled from the
+    store is self-describing: filterable, citable and renderable without a lookup.
     """
 
     chunk_id: str
@@ -105,11 +98,9 @@ DocumentStatus = Literal[
 class OcrTelemetry(BaseModel):
     """What the recognition stage did, and what it cost.
 
-    `post_fallback_confidence` is NOT comparable to `tesseract_confidence`. Tesseract
-    reports a per-word confidence derived from its own classifier. A vision model has
-    no such signal, so the number here is the model's SELF-REPORTED legibility - a
-    model-graded figure, labelled as such wherever it is displayed, and never mixed
-    into a measured average.
+    `post_fallback_confidence` is the vision model's self-reported legibility and is
+    NOT comparable to Tesseract's measured per-word score. Labelled as model-graded
+    wherever shown, never mixed into a measured average.
     """
 
     tesseract_confidence: float | None = None
@@ -139,10 +130,8 @@ class Document(BaseModel):
     missing_required_fields: list[str] = Field(default_factory=list)
     review_reason: str | None = None
 
-    # Which rung of the ladder sent this page to vision. "low_confidence" means the
-    # page looked bad; "missing_fields" means it read clean and still did not yield
-    # what the schema required - a distinction worth keeping, because the second case
-    # is the one a confidence score cannot detect.
+    # Which rung sent this page to vision: the page looked bad, or it read clean and
+    # still did not yield what the schema required.
     escalated_on: Literal["low_confidence", "missing_fields"] | None = None
     missing_before_escalation: list[str] = Field(default_factory=list)
 
@@ -156,23 +145,16 @@ class Document(BaseModel):
 
     @property
     def ocr_mean_confidence(self) -> float | None:
-        """Effective confidence: the fallback's figure when one was used.
-
-        Deliberately a property rather than a stored field, so there is exactly one
-        answer to 'how well was this document read' and it cannot drift from the
-        telemetry it derives from.
-        """
+        """Effective confidence: the fallback's figure when one was used. A property
+        so it cannot drift from the telemetry it derives from."""
         if self.ocr.fallback_used and self.ocr.post_fallback_confidence is not None:
             return self.ocr.post_fallback_confidence
         return self.ocr.tesseract_confidence
 
 
 class ManifestEntry(BaseModel):
-    """Proof that a given byte-sequence was already ingested.
-
-    Keyed by content hash, so re-ingesting an unchanged file is detected before
-    any parsing, OCR or model call happens.
-    """
+    """Proof that a byte-sequence was already ingested. Keyed by content hash, so an
+    unchanged file is detected before any parsing, OCR or model call."""
 
     content_hash: str
     document_id: str
@@ -181,11 +163,8 @@ class ManifestEntry(BaseModel):
     chunk_ids: list[str]
     ingested_at: datetime
 
-    # The review verdict is persisted, not merely printed. It used to live only in
-    # the terminal output of the run that produced it, which meant idempotence ate
-    # it: the second ingest reported `unchanged` and said nothing about the document
-    # sitting in review. A system that decides something needs a human and then
-    # forgets by the next run has not escalated anything.
+    # The review verdict is persisted, not merely printed, so idempotence does not
+    # empty the queue: a re-ingest still reports what is waiting on a human.
     status: DocumentStatus = "extracted"
     review_reason: str | None = None
     missing_required_fields: list[str] = Field(default_factory=list)
@@ -193,8 +172,8 @@ class ManifestEntry(BaseModel):
 
 
 class IngestOutcome(BaseModel):
-    """What happened to one file. Status mirrors DocumentStatus so there is one
-    vocabulary for 'what happened', not two that can disagree."""
+    """What happened to one file. Status mirrors DocumentStatus, so there is one
+    vocabulary rather than two that can disagree."""
 
     status: DocumentStatus
     document: Document | None = None
@@ -213,12 +192,8 @@ class IngestOutcome(BaseModel):
 # --------------------------------------------------------------------------- #
 
 class Claim(BaseModel):
-    """One factual assertion, and the chunks it rests on.
-
-    `cited_chunk_ids` are REAL chunk IDs, not per-query labels. The model is shown
-    the actual IDs and cites them directly, so there is no translation layer between
-    what the model said and what the citation resolves to.
-    """
+    """One factual assertion, and the chunks it rests on. `cited_chunk_ids` are real
+    chunk IDs, so nothing translates between what was said and what it resolves to."""
 
     text: str
     cited_chunk_ids: list[str] = Field(min_length=1)
@@ -228,17 +203,15 @@ class DraftAnswer(BaseModel):
     answer: str
     claims: list[Claim] = Field(default_factory=list)
 
-    # Whether the cited chunks actually answer the QUESTION - distinct from whether
-    # any true claim could be made from them. The two come apart constantly: asked to
-    # compare an invoice against a contract while holding only the contract, the model
-    # correctly says it cannot, and correctly states several true facts about the
-    # contract on the way. Counting claims reads that as an answer. Asking for the
-    # judgement directly is the difference between a refusal and a subject change.
+    # Whether the chunks answer the QUESTION, distinct from whether any true claim can
+    # be made from them. Holding only a contract, the model can state true facts about
+    # it while being unable to compare it to an invoice; counting claims calls that an
+    # answer.
     answers_question: bool = True
 
 
 class Verdict(BaseModel):
-    """A verifier's judgement on one claim against one cited chunk."""
+    """A verifier's judgement on one claim against its cited chunks."""
 
     supported: bool
     reason: str
@@ -271,10 +244,8 @@ class GenerationRound(BaseModel):
     stripped: list[StrippedClaim] = Field(default_factory=list)
     cost_usd: float = 0.0
 
-    # Set when a claim was PLANTED into this round by fault injection rather than
-    # produced by the model. Recorded on the trace so that a stripped claim in an
-    # eval report can never be mistaken for a hallucination the system happened to
-    # emit: the report states which failures were induced and which were observed.
+    # Set when a claim was planted by fault injection rather than produced by the
+    # model, so an eval report never mistakes it for a real hallucination.
     injected_claim: str | None = None
 
 
@@ -282,12 +253,9 @@ QueryStatus = Literal["answered", "refused", "human_review"]
 
 
 class QueryTrace(BaseModel):
-    """One JSON file per query - the only output format.
-
-    `ask` renders it, `eval` scores a list of them, `show` resolves citations out of
-    it. One model, three consumers: there is no second description of what happened
-    that could disagree with this one.
-    """
+    """One JSON file per query, and the only output format: `ask` renders it, `eval`
+    scores a list of them, `show` resolves its citations. No second account of what
+    happened that could disagree."""
 
     trace_id: str
     question: str

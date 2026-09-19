@@ -1,11 +1,8 @@
-"""Classification and extraction - the two model calls that turn pages into records.
+"""Classification and extraction: the two model calls that turn pages into records.
 
-Deliberately two calls, not one. `unknown` short-circuits before the expensive
-extraction, each stage is independently testable, and a failure attributes to a
-named stage without having to unpick which half of a combined call went wrong.
-
-LangChain's only job in this codebase is the boundary below: a chat client, a
-prompt, and schema-enforced output. No chains, no agents, no retrievers.
+Two calls, not one, so `unknown` short-circuits before the expensive extraction and
+each stage is independently testable. LangChain's only job here is the model-call
+boundary: a chat client, a prompt, schema-enforced output.
 """
 from __future__ import annotations
 
@@ -54,12 +51,10 @@ def lexical_prior(text: str) -> tuple[str | None, int]:
     return (best, scores[best]) if scores[best] else (None, 0)
 
 
-# Type definitions, not just type names. Written after a retail receipt was classified
-# `invoice` at 0.95 confidence: the taxonomy listed four labels but never said what
-# distinguished them, and `invoice` is a plausible answer for anything carrying a
-# vendor, a date and a total. Naming what each type is FOR - and naming the near-misses
-# explicitly - is cheaper than any confidence threshold, because a confidence gate
-# cannot catch a model that is confidently wrong.
+# Definitions, not just labels. `invoice` is a plausible answer for anything with a
+# vendor, a date and a total, so naming what each type is for - and naming the
+# near-misses - does what no confidence threshold can: a gate cannot catch a model
+# that is confidently wrong.
 TYPE_DEFINITIONS = """\
 invoice
     A seller's REQUEST FOR PAYMENT, issued to a named business customer for goods or
@@ -107,16 +102,9 @@ def classify(chunks: list[Chunk]) -> tuple[DocumentType, float]:
     if label not in FIELD_SPECS:
         return "unknown", confidence
 
-    # Guard 2 (deterministic): disagreement with a keyword count costs confidence.
-    #
-    # The only cross-check applied here. An earlier version also penalised a
-    # classification whose cited evidence was not found verbatim in the text. That was
-    # removed because it demoted CORRECT classifications to `unknown`: the model
-    # reasonably answers with a synthesised span ("INVOICE; Invoice Number:
-    # INV-2026-0117; Total Due: $12,480.00") that is accurate but contiguous nowhere,
-    # and whether it happened to match varied between runs. A guard that randomly
-    # discards right answers is worse than no guard. Real evidence grounding happens in
-    # extract(), where a wrong quote actually costs something.
+    # Deterministic cross-check: disagreement with the keyword prior costs confidence.
+    # The only guard here - evidence grounding belongs in extract(), where a wrong
+    # quote actually costs something.
     prior, hits = lexical_prior(sample)
     if prior and hits >= 2 and prior != label:
         confidence *= 0.5
@@ -180,12 +168,9 @@ def extract(document: Document, chunks: list[Chunk]):
         "For each scalar field give the value, a verbatim evidence_quote containing it, and "
         "the chunk_id you read it from. Use null for any field genuinely absent - do NOT "
         "infer, derive or invent a value that is not printed on the document.\n\n"
-        # The gap this closes: "do not invent" does not cover choosing. On a sheet
-        # listing three suppliers, one supplier's rate IS printed on the document, so
-        # returning it breaks no rule above - and the consumer cannot tell the other
-        # two exist. Observed picking row 1 on all 5 of 5 runs, having been recorded
-        # months earlier as declining to pick; nothing in this prompt ever asked it to
-        # decline, so that earlier behaviour was the model's, not the system's.
+        # "Do not invent" does not cover choosing: on a sheet of three suppliers, one
+        # supplier's rate IS printed, so returning it breaks no rule above and nothing
+        # downstream can tell the other two exist.
         "These scalar fields describe ONE record. If this file contains SEVERAL "
         "separate records of the SAME type - several suppliers listed on one sheet, "
         "several invoices bundled together - then a scalar has no single correct "
@@ -193,20 +178,14 @@ def extract(document: Document, chunks: list[Chunk]):
         "instead of choosing one. Choosing one is not a partial answer, it is a wrong "
         "answer, because nothing downstream can tell that the others exist. Documents "
         "of OTHER types in the same file are not competing records; ignore them.\n"
-        # Needed because the blunter version declined on a 7-page accounts-payable
-        # packet that contains exactly ONE invoice alongside cheques and payment
-        # requests - it counted money-bearing paperwork rather than instances of the
-        # type being extracted, and refused a document it could read perfectly.
+        # Scoped to the type being extracted: without this it counts money-bearing
+        # paperwork and refuses a packet holding exactly one invoice among cheques.
         "Count only records that would themselves be classified as "
         f"a {document.document_type.replace('_', ' ')}. If exactly ONE such record is "
         "present, extract it normally, even when the file also holds other kinds of "
         "paperwork carrying their own amounts, dates and reference numbers.\n\n"
-        # Amendment policy. Deliberately a product decision rather than an inference:
-        # a document that strikes a value out has retired it, and the surviving value
-        # beside it is the one the document now asserts. This reverses the earlier
-        # gold for G4, which preferred the printed value on the grounds that the
-        # handwritten amendment was not countersigned. That reading is defensible and
-        # it is not the one chosen here.
+        # Amendment policy, a product decision: a struck value has been retired and
+        # the surviving value beside it is what the document now asserts.
         "If a value is struck through, crossed out or overwritten - marked [STRUCK] "
         "in the text, or otherwise shown as cancelled - the document has RETIRED it. "
         "Do not return a struck value. Use the surviving value written next to it "
@@ -214,13 +193,8 @@ def extract(document: Document, chunks: list[Chunk]):
         "several candidates are struck and one is not, the unstruck one is the "
         "answer. If every candidate is struck and nothing replaces them, return "
         "null.\n\n"
-        # REVERTED: a sentence once stood here giving this rule precedence over the
-        # multi-record rule, because struck-plus-survivor reads as "several candidates
-        # that differ" and was abstaining on 2 of 7 runs. Pushing it to commit rather
-        # than abstain moved gkdb0226 from 5/7 correct with 0 wrong to 2/5 correct
-        # with 2 WRONG - and both wrong answers were variants of the struck-through
-        # candidate. The abstentions were the system declining when it was unsure
-        # which value had survived, which is the behaviour worth keeping.
+        # No precedence rule over the multi-record case above: forcing a choice there
+        # produces wrong answers rather than abstentions. See eval/holdout_findings.md.
         "List EVERY billed or ordered line in line_items; do not summarise or truncate. "
         "Dates must be ISO YYYY-MM-DD. Currency and numeric values must be plain numbers "
         "with no symbols or thousands separators.\n\n"

@@ -1,18 +1,10 @@
-"""Claude vision fallback: a second read of a page Tesseract could not manage.
+"""Claude vision fallback: a second read of a page Tesseract could not manage. One
+call, no route-selection logic.
 
-One threshold, one call, no route-selection logic. When Tesseract's mean word
-confidence falls below MIN_OCR_FOR_VISION_FALLBACK the rendered page is sent to
-Claude for transcription, and what came back is recorded alongside what it cost.
-
-On the confidence figure it returns - read this before using the number.
-
-Tesseract's confidence is a per-word score from its own classifier: a measurement,
-comparable across documents. A vision model has no equivalent. What this module
-records as `post_fallback_confidence` is the model's SELF-REPORTED legibility
-assessment. It is model-graded, it is not calibrated, and it must never be averaged
-together with Tesseract figures or presented as the same kind of number. Every
-display of it is labelled. The honest use is as a gate ("did the second read go
-better?"), not as a measurement.
+`post_fallback_confidence` is the model's self-reported legibility, not a
+measurement. Tesseract's figure is a per-word classifier score and the two are not
+comparable: use this one as a gate ("did the second read go better?"), never averaged
+with Tesseract or presented as the same kind of number.
 """
 from __future__ import annotations
 
@@ -47,10 +39,8 @@ PROMPT = (
     "- Transcribe handwritten annotations on a separate line prefixed [HANDWRITTEN], "
     "and do not merge them into the printed text.\n"
     "- Transcribe stamps on a separate line prefixed [STAMP].\n"
-    # Without this the transcription silently flattens a correction into two
-    # equally-valid-looking values, and no downstream policy can tell which one the
-    # document retired. Marking it is recognition's job; deciding what it means is
-    # extraction's.
+    # Marking a correction is recognition's job; deciding what it means is
+    # extraction's. Without it the two values arrive looking equally valid.
     "- If text is struck through, crossed out or overwritten, transcribe it wrapped "
     "as [STRUCK]...[/STRUCK] so it is clear the document retired that value. Keep "
     "any replacement value on its own line near it.\n"

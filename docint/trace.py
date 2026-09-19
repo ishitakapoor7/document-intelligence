@@ -1,10 +1,7 @@
-"""Reading, writing and rendering a QueryTrace.
+"""Reading, writing and rendering a QueryTrace - one JSON file per query.
 
-One JSON file per query under runs/. The trace is the only output format in the
-system: `ask` renders one, `eval` scores a list of them, and `show` resolves the
-chunk IDs inside one. There is deliberately no second, prettier record of what
-happened that could disagree with the audited one - what the reviewer reads on the
-terminal is a rendering of the exact file the eval harness scores.
+The terminal view is a rendering of the exact file the eval harness scores, so there
+is no second account of what happened that could disagree.
 """
 from __future__ import annotations
 
@@ -32,7 +29,7 @@ def load(trace_id: str) -> QueryTrace:
 
 
 def render(trace: QueryTrace) -> str:
-    """The terminal view of a trace. Every line here is read back out of the JSON."""
+    """The terminal view of a trace, rendered entirely from the JSON."""
     out: list[str] = []
     add = out.append
 

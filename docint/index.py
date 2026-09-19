@@ -1,14 +1,10 @@
-"""Indexing and access-filtered retrieval.
+"""Indexing and access-filtered retrieval. LlamaIndex owns this layer and nothing
+else touches it; it never calls an LLM.
 
-LlamaIndex owns this layer and nothing else in the codebase touches it. It never
-calls an LLM (`Settings.llm = None`) - retrieval here is embeddings and metadata
-filters, so the only non-determinism in the query path is the answer generation
-itself.
-
-The access filter is the security control, and it is applied INSIDE the store: the
-`where` clause reaches Chroma, so chunks the requester may not see are never returned
-to this process at all. Filtering after retrieval would mean unauthorised text had
-already been loaded into memory, one forgotten line away from a prompt.
+The access filter is the security control and it is applied INSIDE the store - the
+`where` clause reaches Chroma, so chunks the requester may not see never enter this
+process. Filtering after retrieval would mean unauthorised text was already in
+memory, one forgotten line from a prompt.
 """
 from __future__ import annotations
 
@@ -35,12 +31,8 @@ from docint.models import Chunk, Document, SourceLocation
 
 
 class FastEmbedAdapter(BaseEmbedding):
-    """Minimal BaseEmbedding over fastembed.
-
-    Exists because llama-index-embeddings-fastembed pins Python <3.13. Fifteen lines
-    here beat installing a second interpreter, and it keeps torch out of the tree -
-    fastembed runs on onnxruntime, so a fresh clone installs in seconds.
-    """
+    """Minimal BaseEmbedding over fastembed, because llama-index-embeddings-fastembed
+    pins Python <3.13. Also keeps torch out of the tree."""
 
     _model: Any = None
 
@@ -65,20 +57,14 @@ _configured = False
 
 
 def _configure() -> None:
-    """Set the embedding model without ever READING Settings.embed_model.
-
-    Reading that property triggers LlamaIndex's lazy default, which resolves to
-    OpenAI and raises ImportError before our assignment is ever reached. The flag
-    avoids touching the getter at all.
-    """
+    """Set the embedding model without ever reading Settings.embed_model - that getter
+    triggers LlamaIndex's lazy OpenAI default and raises ImportError."""
     global _configured
     if _configured:
         return
     Settings.embed_model = FastEmbedAdapter()
-    # LlamaIndex must never make a model call. `Settings.llm = None` achieves that,
-    # but its resolver then prints "LLM is explicitly disabled. Using MockLLM." to
-    # stdout on every retrieval - above the answer, reading like a warning. Handing it
-    # the MockLLM directly is the same guarantee, stated rather than inferred.
+    # MockLLM rather than None: same guarantee, without LlamaIndex printing "LLM is
+    # explicitly disabled" to stdout above every answer.
     Settings.llm = MockLLM()
     _configured = True
 
@@ -86,9 +72,8 @@ def _configure() -> None:
 def to_text_node(chunk: Chunk) -> TextNode:
     """Chunk -> node. Metadata is flat because Chroma only stores scalars.
 
-    `access_tag` is excluded from both the embedded text and the LLM-visible text: it
-    must be filterable without ever being readable by the model, which could otherwise
-    learn that other tags exist.
+    `access_tag` is excluded from embedded and LLM-visible text: filterable without
+    being readable by the model.
     """
     metadata = {
         "document_id": chunk.document_id,
@@ -136,17 +121,12 @@ def upsert(index: VectorStoreIndex, chunks: list[Chunk]) -> int:
 
 
 def scope_document_types(question: str) -> list[str]:
-    """Deterministic lexical routing, reusing the classification keyword map.
+    """Deterministic lexical routing over the classification keyword map. Returns every
+    type the question plausibly targets, or [] for no scoping.
 
-    Returns every type the question plausibly targets, or [] for no scoping. No LLM,
-    so retrieval stays deterministic.
-
-    Matching is word-boundary, not substring. With plain substring matching "does the
-    PO cover the invoice total" scoped to `invoice` ALONE - the purchase-order keywords
-    are "po number" and "po-", neither of which appears - and the filter would then have
-    excluded the very document needed to answer. On a cross-document question an
-    over-narrow scope is far more damaging than no scope at all, so this errs towards
-    including a type rather than excluding one.
+    Word-boundary, not substring, and it errs towards including a type: on a
+    cross-document question an over-narrow scope excludes the document needed to
+    answer, which is far worse than no scope.
     """
     lowered = question.lower()
     matched = []
@@ -159,9 +139,8 @@ def scope_document_types(question: str) -> list[str]:
 def build_filters(access_tags: frozenset[str], document_types: list[str] | None) -> MetadataFilters:
     """ACL filter, optionally ANDed with a query-derived type filter.
 
-    The access term is always present and always the outer AND. A query-derived filter
-    can only ever NARROW the candidate set - there is no code path by which it replaces,
-    relaxes or ORs with the access term.
+    The access term is always the outer AND. A query-derived filter can only narrow;
+    no code path lets it replace, relax or OR with the access term.
     """
     access = MetadataFilters(
         condition=FilterCondition.OR,
@@ -179,13 +158,9 @@ def build_filters(access_tags: frozenset[str], document_types: list[str] | None)
 
 
 def get_chunks(chunk_ids: list[str], index: VectorStoreIndex | None = None) -> dict[str, dict]:
-    """Resolve chunk IDs back to their text and metadata, straight out of the store.
-
-    This is what makes a citation checkable by hand: the ID printed under an answer
-    is the primary key of the thing it came from, so `show` is a lookup rather than
-    a search. No access filter is applied here - the caller supplies one, because the
-    eval harness legitimately reads chunks no single principal can see.
-    """
+    """Resolve chunk IDs back to text and metadata, so `show` is a lookup rather than
+    a search. No access filter here - the caller applies one, since the eval harness
+    legitimately reads chunks no single principal can see."""
     if not chunk_ids:
         return {}
     index = index or open_index()

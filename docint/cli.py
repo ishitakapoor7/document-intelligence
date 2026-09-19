@@ -28,9 +28,7 @@ def _print_outcome(path: Path, outcome: IngestOutcome) -> None:
     doc = outcome.document
 
     if outcome.status == "unchanged":
-        # Carry the remembered verdict. Without it, idempotence silently emptied the
-        # review queue: the second run of a corpus said `unchanged` for a document
-        # the first run had flagged for a human.
+        # Carry the remembered verdict, or idempotence empties the review queue.
         remembered = outcome.remembered
         flag = ""
         if remembered is not None and remembered.status != "extracted":
@@ -124,7 +122,7 @@ def cmd_ask(args: argparse.Namespace) -> int:
 
 
 def cmd_show(args: argparse.Namespace) -> int:
-    """Resolve a citation by hand. The ID under an answer is the store's primary key."""
+    """Resolve a citation by hand - the ID under an answer is the store's primary key."""
     from docint.index import get_chunks
 
     tags = ACCESS_PROFILES.get(args.as_profile)
@@ -138,8 +136,8 @@ def cmd_show(args: argparse.Namespace) -> int:
         print(f"\n  no chunk {args.chunk_id!r} in the index - ingest first, or check the ID\n")
         return 1
 
-    # `show` is a read of the same corpus, so it answers to the same access rule.
-    # A citation a principal cannot retrieve is not one they may read out of band.
+    # Same corpus, same access rule: a citation a principal cannot retrieve is not
+    # one they may read out of band.
     if chunk["access_tag"] not in tags:
         print(f"\n  {BOLD}access denied{RESET}  {args.as_profile} is not cleared for this document\n")
         return 3
@@ -157,17 +155,8 @@ def cmd_show(args: argparse.Namespace) -> int:
 def cmd_review(args: argparse.Namespace) -> int:
     """List every ingested document waiting on a human, and why.
 
-    This is the whole of the human-in-the-loop story and it is deliberately not a
-    workflow: no assignment, no locking, no resume, no state transitions. Human
-    review is an OUTPUT STATE - the pipeline stops, says what it could not do, and
-    leaves the document indexed and findable. What this command adds is that the
-    state is durable and queryable rather than a line that scrolled past during an
-    ingest six hours ago.
-
-    The deferred upgrade, with its trigger, is in the README: when review becomes a
-    workflow someone works through - claims an item, resolves it, and the correction
-    flows back - that is a durable, resumable process and the right moment to bring
-    in a graph runtime. It is not this.
+    Review is an output state, not a workflow: no assignment, locking, resume or
+    state transitions. This makes the state durable and queryable.
     """
     from docint.ingest import load_manifest
 
@@ -199,12 +188,9 @@ def cmd_review(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    """Check the things a fresh clone gets wrong, before they fail mid-pipeline.
-
-    Every check here corresponds to a failure that actually happened during this
-    build: a missing binary, a missing key, an empty index that makes `ask` refuse
-    for the wrong reason.
-    """
+    """Check what a fresh clone gets wrong before it fails mid-pipeline: a missing
+    binary, a missing key, or an empty index that makes `ask` refuse for the wrong
+    reason."""
     import os
     import shutil
 

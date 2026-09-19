@@ -1,13 +1,10 @@
-"""The ingest pipeline: bytes -> typed, field-extracted, located, status-tagged chunks.
+"""Ingest: bytes -> typed, field-extracted, located, status-tagged chunks.
 
-Plain Python orchestration. The recognition ladder is the interesting part:
+The recognition ladder has two triggers and one floor:
 
-    Tesseract -> below MIN_OCR_FOR_VISION_FALLBACK? -> Claude vision -> re-measure
-              -> still below MIN_OCR_CONFIDENCE?    -> human review, extraction skipped
-
-Classification runs BEFORE the quality gate, because it survives poor recognition far
-better than field extraction does. A review item that says "this is a purchase order
-whose numbers cannot be trusted" is worth more than an untyped blob.
+    low confidence  -> vision
+    missing fields  -> vision, re-extract
+    still missing   -> human review, extraction skipped
 """
 from __future__ import annotations
 
@@ -48,8 +45,7 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
     path = Path(path)
     started = time.perf_counter()
 
-    # 1. Content hash first - an unchanged file short-circuits everything below,
-    #    including every model call. This is why a re-run is instant and free.
+    # 1. Content hash first: an unchanged file short-circuits every model call below.
     digest = content_hash(path)
     if not force and digest in manifest:
         return IngestOutcome(status="unchanged", detail=manifest[digest].document_id,
@@ -61,33 +57,23 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
     except UnsupportedFileType as exc:
         return IngestOutcome(status="unsupported_format", detail=str(exc))
 
-    # 3. Recognition ladder: escalate a poorly-read scan to vision before judging it.
-    # `force_vision` exists because Tesseract confidence measures the words it FOUND
-    # and says nothing about what it never found. gkdb0226.pdf scores 90.1 - above the
-    # escalation gate - while having silently dropped the entire P.O. Number field and
-    # misread the letterhead. Escalated anyway, the same page yields the invoice
-    # number, the correct vendor and the struck/surviving PO pair. Coverage is
-    # invisible to confidence, so the control is exposed rather than the gate retuned
-    # on one document.
+    # 3. First rung: a poorly-read scan goes to vision before anything judges it.
+    #    `force_vision` overrides the gate, since confidence measures the words OCR
+    #    found and is silent about the ones it dropped.
     tess = document.ocr.tesseract_confidence
     if (vision_fallback and tess is not None and path.suffix.lower() == ".pdf"
             and (force_vision or tess < MIN_OCR_FOR_VISION_FALLBACK)):
         document.escalated_on = "low_confidence"
         chunks = _escalate(path, chunks, document)
 
-    # 4. Classify. Runs before the quality gate; an unclear document becomes `unknown`
-    #    rather than being forced into a label.
+    # 4. Classify. An unclear document becomes `unknown` rather than forced into a
+    #    label; classification survives poor recognition better than extraction does.
     document.document_type, document.classification_confidence = classify(chunks)
     chunks = finalize_chunks(chunks, document)
 
-    # 5. Quality gate, applied to the EFFECTIVE confidence - i.e. after any fallback.
-    #    Checked BEFORE the `unknown` short-circuit, because "we could not identify
-    #    this document" is a conclusion drawn FROM the text, and it is not available
-    #    when the text itself is unreadable. lmcj0190.pdf reads at 54.0 even after
-    #    vision and was reported `unknown_type` - true, but it sent a reviewer looking
-    #    for a missing document type when the actionable fact was that the scan is
-    #    barely legible. The classification is still recorded on the document either
-    #    way; only the status changes, and it now names the earlier cause.
+    # 5. Quality floor, on the effective confidence (i.e. after any fallback). Runs
+    #    before the `unknown` short-circuit: "we cannot identify this" is a conclusion
+    #    drawn from text, and is not available when the text cannot be read.
     effective = document.ocr_mean_confidence
     if effective is not None and effective < MIN_OCR_CONFIDENCE:
         document.status = "needs_review_ocr"
@@ -110,29 +96,10 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
     document.fields, document.line_items, document.extraction_cost_usd = extract(document, chunks)
     missing = _missing_required(document)
 
-    # 6b. Second rung: escalate on a FIELD DEFICIT, not just on low confidence.
-    #
-    #     A missing required field is direct evidence that recognition failed to
-    #     deliver what the schema needs. A confidence score is only a proxy for
-    #     that, and a poor one: it averages the words Tesseract FOUND and is
-    #     completely silent about the ones it dropped. gkdb0226.pdf reads at 90.1 -
-    #     comfortably above the confidence gate - having lost the invoice number,
-    #     the date and the entire P.O. Number field. Nothing about 90.1 could have
-    #     revealed that; "the schema asked for five values and recognition produced
-    #     three" says it outright.
-    #
-    #     So the ladder now has two independent triggers and one floor:
-    #
-    #        poor confidence  -> vision            (the page looks bad)
-    #        missing fields   -> vision, re-extract (the page read clean and still
-    #                                                did not yield what we need)
-    #        still missing    -> human review
-    #
-    #     Only fires once, only for a scan, and only when something is actually
-    #     absent - so the cost lands exactly on the documents that failed. The
-    #     document type is NOT re-derived: classification survives poor recognition
-    #     well (3/3 on the holdouts before any escalation), and re-running it would
-    #     spend a call to re-answer a question already answered.
+    # 6b. Second rung: a missing required field is direct evidence that recognition
+    #     did not deliver what the schema needs, where a confidence score is only a
+    #     proxy. Fires once, only for a scan, only when something is actually absent,
+    #     so the cost lands on the documents that failed. The type is not re-derived.
     if (missing and vision_fallback and not document.ocr.fallback_used
             and document.file_type == "pdf_scanned" and path.suffix.lower() == ".pdf"):
         document.escalated_on = "missing_fields"
@@ -144,8 +111,7 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
         document.extraction_cost_usd += cost
         missing = _missing_required(document)
 
-        # The better transcription can also reveal that the page was worse than
-        # Tesseract claimed. Re-apply the floor rather than asserting values off it.
+        # A better transcription can reveal the page was worse than Tesseract said.
         effective = document.ocr_mean_confidence
         if effective is not None and effective < MIN_OCR_CONFIDENCE:
             document.status = "needs_review_ocr"
@@ -155,8 +121,8 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
                 f"{effective:.1f}, below the {MIN_OCR_CONFIDENCE:.0f} threshold.")
             return _finish(manifest, document, chunks, started, index)
 
-    # 7. A required field we could not read is a review item, NOT a silent gap - and
-    #    the classification is preserved so the reviewer knows what they are looking at.
+    # 7. A required field we could not read is a review item, not a silent gap. The
+    #    classification is preserved so a reviewer knows what they are looking at.
     if missing:
         document.missing_required_fields = missing
         document.status = "needs_review_missing_fields"
@@ -178,12 +144,8 @@ def _missing_required(document: Document) -> list[str]:
 
 
 def _escalate(path: Path, chunks: list[Chunk], document: Document) -> list[Chunk]:
-    """Re-read the page with Claude vision and record what that cost.
-
-    One function because the ladder now reaches it from two rungs - poor confidence
-    before classification, and a field deficit after extraction - and the telemetry
-    must be recorded identically either way.
-    """
+    """Re-read with vision and record the cost. Both rungs come through here, so the
+    telemetry is recorded identically either way."""
     from docint.vision_ocr import escalate
 
     chunks, legibility, cost, latency = escalate(path, chunks)
@@ -197,9 +159,9 @@ def _escalate(path: Path, chunks: list[Chunk], document: Document) -> list[Chunk
 
 def _finish(manifest, document: Document, chunks: list[Chunk], started: float,
             index=None) -> IngestOutcome:
-    # Indexed regardless of status: a document routed to review or typed `unknown` is
-    # still findable, it simply carries no asserted field values. Hiding it would mean
-    # a question about it silently returns nothing rather than a flagged answer.
+    # Indexed regardless of status: a document in review is still findable, it just
+    # carries no asserted values. Hiding it would make questions about it return
+    # nothing rather than a flagged answer.
     if index is not None and chunks:
         from docint.index import upsert
         upsert(index, chunks)

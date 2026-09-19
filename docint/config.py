@@ -8,8 +8,8 @@ from typing import Literal
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
-# Explicit path: find_dotenv() walks the caller's stack frame and fails when the
-# entry point has no frame (e.g. `python - <<EOF`).
+# Explicit path: find_dotenv() walks the caller's stack frame, which is absent when
+# the entry point has none (e.g. `python - <<EOF`).
 load_dotenv(dotenv_path=ROOT / ".env")
 
 CORPUS_DIR = ROOT / "corpus"
@@ -20,64 +20,44 @@ CHROMA_DIR = RUNS_DIR / "chroma"
 # --------------------------------------------------------------------------- #
 # Models
 # --------------------------------------------------------------------------- #
-MODEL_CLASSIFY = "claude-haiku-4-5"   # 4-way choice over a short excerpt
-MODEL_EXTRACT = "claude-opus-5"       # where the trust guarantees live
-MODEL_VERIFY = "claude-haiku-4-5"     # isolated per-claim citation check
+MODEL_CLASSIFY = "claude-haiku-4-5"
+MODEL_EXTRACT = "claude-opus-5"
+MODEL_VERIFY = "claude-haiku-4-5"
 MODEL_ANSWER = "claude-opus-5"
+MODEL_VISION = "claude-opus-5"
 
 # --------------------------------------------------------------------------- #
 # Thresholds
 # --------------------------------------------------------------------------- #
+# OCR thresholds are measured, not guessed: the same purchase order at three scan
+# qualities reads 95.1 / 62.4 / 43.4. See eval/ocr_ladder.md.
 
-# Two OCR thresholds, both MEASURED through the real pipeline (eval/ocr_ladder.md).
-# The same purchase order at three scan qualities gives 95.1 / 62.4 / 43.4.
-#
-# Below this, a document is routed to human review instead of extracted from: the
-# text is too poor to assert values off. Sits between the L2 and L3 observations.
-MIN_OCR_CONFIDENCE = 55.0
+MIN_OCR_CONFIDENCE = 55.0      # below: human review, extraction skipped
+LOW_CONFIDENCE_FIELD = 75.0    # below: extract, but flag every field
+MIN_CLASSIFY_CONFIDENCE = 0.60  # below: `unknown` rather than a forced label
 
-# Above the review threshold but below this, values ARE extracted but every field
-# is surfaced as low-confidence rather than asserted flatly. Sits between L1 and L2.
-LOW_CONFIDENCE_FIELD = 75.0
+# Below this Tesseract confidence, escalate the page to vision. Set at the field-flag
+# threshold: if values would be surfaced as untrusted anyway, a better read is worth
+# one call.
+MIN_OCR_FOR_VISION_FALLBACK = 75.0
 
-# Below this self-reported classification confidence, a document becomes `unknown`
-# rather than being forced into a label it does not fit.
-MIN_CLASSIFY_CONFIDENCE = 0.60
-
-# A PDF page with fewer than this many extractable characters is treated as a
-# scan and sent through OCR. The demo invoice page has 507; the scanned PO has 0.
+# A PDF page yielding fewer characters than this is treated as a scan.
 MIN_TEXT_LAYER_CHARS = 100
 
-# ...but a text layer is NOT evidence that a page was born digital, and treating it
-# that way was a hole straight through the middle of this system. Archived business
-# documents are overwhelmingly scans that somebody else already ran OCR over, and
-# that inherited layer arrives with no confidence signal, no provenance and no
-# guarantee of accuracy. Every page of all three external holdouts is a full-page
-# raster image with such a layer on top; each was labelled `pdf_digital`, so
-# Tesseract never ran, no confidence was ever measured, the review gate could not
-# fire and the vision fallback was unreachable. One was extracted at full confidence
-# with the vendor name wrong, because the inherited layer read "Arista
-# Laboratories" as "Uristo".
-#
-# A page whose area is essentially covered by a raster image is a scan, whatever
-# text rides along with it. That is a structural fact about the page rather than a
-# guess about its text, so it holds for documents nobody here has seen.
+# A text layer is not evidence that a page was born digital - archived documents are
+# usually scans somebody else already OCR'd, and that inherited text carries no
+# confidence and no provenance. A page mostly covered by a raster image is a scan
+# whatever text rides along with it, which is structural rather than a guess.
 RASTER_PAGE_COVERAGE = 0.80
-
-# Retrieval. top_k is generous because the corpus is small - at three documents this
-# returns most of it, which is why retrieval quality is not yet a variable here.
-RETRIEVAL_TOP_K = 8
-MIN_RETRIEVAL_SCORE = 0.25
 
 OCR_RENDER_DPI = 300
 
-# Below this Tesseract confidence the page is escalated to Claude vision for a second
-# transcription. Set at the field-flag threshold: if values would be surfaced as
-# untrusted anyway, a better read is worth one call.
-MIN_OCR_FOR_VISION_FALLBACK = 75.0
-MODEL_VISION = "claude-opus-5"
+# top_k is generous because the corpus is small; at three documents it returns most
+# of it, so retrieval quality is not yet a variable.
+RETRIEVAL_TOP_K = 8
+MIN_RETRIEVAL_SCORE = 0.25
 
-# USD per million tokens, for the cost column in the degraded-case table.
+# USD per million tokens.
 PRICING = {
     "claude-opus-5":  {"input": 5.00, "output": 25.00},
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00},
@@ -90,8 +70,9 @@ def usd_cost(model: str, input_tokens: int, output_tokens: int) -> float:
         return 0.0
     return (input_tokens * p["input"] + output_tokens * p["output"]) / 1_000_000
 
+
 # --------------------------------------------------------------------------- #
-# Extraction schemas - plain data, so adding a document type is a config change
+# Extraction schemas - plain data, so a new document type is a config change
 # --------------------------------------------------------------------------- #
 
 FieldKind = Literal["identifier", "string", "date", "currency", "number", "line_items"]
@@ -105,16 +86,15 @@ class FieldSpec:
     required: bool = False   # absent required field -> human review, type preserved
 
 
-# `quantity` and `unit_price` are deliberately NOT scalar invoice fields. They were,
-# and on a six-line invoice the pipeline silently returned line 1 of 6 with nothing
-# marking it partial - a schema limitation invisible on single-line fixtures. Repeating
-# data now lives in line_items[]; scalars describe the document, not its rows.
+# Scalars describe the document; repeating rows live in line_items[]. Holding
+# quantity or unit_price as a scalar silently returns row 1 of N on a multi-line
+# invoice, with nothing marking it partial.
 FIELD_SPECS: dict[str, tuple[FieldSpec, ...]] = {
     "invoice": (
         FieldSpec("invoice_number", "identifier", "the invoice's own number, e.g. INV-2026-0117", required=True),
         FieldSpec("vendor_name",    "string",     "the company that issued the invoice", required=True),
         FieldSpec("invoice_date",   "date",       "date of issue, ISO YYYY-MM-DD", required=True),
-        # optional: many legitimate invoices carry no PO reference at all
+        # optional: many legitimate invoices carry no PO reference
         FieldSpec("po_reference",   "identifier", "purchase order this invoice bills against, if any"),
         FieldSpec("total_amount",   "currency",   "total amount due", required=True),
         FieldSpec("line_items",     "line_items", "every billed line on the invoice"),
@@ -147,8 +127,8 @@ def scalar_fields(document_type: str) -> tuple[FieldSpec, ...]:
 
 DOCUMENT_TYPES = tuple(FIELD_SPECS) + ("unknown",)
 
-# Lexical priors: a cheap deterministic second opinion on classification, and the
-# same map drives optional document-type scoping at query time.
+# A cheap deterministic second opinion on classification; the same map drives
+# document-type scoping at query time.
 TYPE_KEYWORDS: dict[str, tuple[str, ...]] = {
     "invoice":        ("invoice", "bill to", "amount due", "remit", "inv-", "invoiced"),
     "purchase_order": ("purchase order", "po ", "po-", "po number", "not-to-exceed",
@@ -160,22 +140,15 @@ TYPE_KEYWORDS: dict[str, tuple[str, ...]] = {
 # --------------------------------------------------------------------------- #
 # Access control
 # --------------------------------------------------------------------------- #
-# One tag per document (attribute on the resource); a principal holds the set they
-# are cleared for; the decision is `doc.access_tag in principal.access_tags`.
-# RBAC at the profile layer, single-attribute ABAC at the resource layer. There is
-# no identity provider - `--as <profile>` stands in for what would be a JWT claim.
-
-# Tags are derived from the DIRECTORY a document sits in, mirroring how folder-level
-# ACLs actually work in a document management system:
+# One tag per document; a principal holds the set they are cleared for; the decision
+# is `doc.access_tag in principal.access_tags`. RBAC at the profile layer,
+# single-attribute ABAC at the resource layer. No identity provider - `--as
+# <profile>` stands in for a JWT claim.
 #
-#     corpus/procurement/invoice_acme_001.pdf   -> procurement
-#     corpus/general/vendor_records.xlsx        -> general
-#
-# An earlier version mapped literal filenames to tags. That was demo scaffolding
-# wearing a config's clothes: it could not survive a renamed file, let alone a real
-# corpus. Directory-derived tags are still a stand-in - in production this comes from
-# the DMS, a folder ACL or a sensitivity label - but it is a stand-in for the right
-# thing, and adding a document requires no code change.
+# Tags come from the directory a document sits in, mirroring folder-level ACLs:
+#     corpus/procurement/invoice_acme_001.pdf -> procurement
+# In production this would come from the DMS or a sensitivity label. Either way
+# adding a document needs no code change.
 DEFAULT_ACCESS_TAG = "procurement"
 
 ACCESS_PROFILES: dict[str, frozenset[str]] = {
@@ -190,6 +163,5 @@ def known_access_tags() -> frozenset[str]:
 
 def access_tag_for(path) -> str:
     """Derive a document's access tag from the directory it lives in."""
-    from pathlib import Path
     parent = Path(path).parent.name
     return parent if parent in known_access_tags() else DEFAULT_ACCESS_TAG

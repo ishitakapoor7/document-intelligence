@@ -1,10 +1,5 @@
-"""The review verdict must survive the run that produced it.
-
-It previously lived only in the terminal output of that ingest, so the second run
-reported `unchanged` and said nothing about a document sitting in review. A system
-that decides something needs a human and forgets by the next run has escalated
-nothing, so the persistence gets a test.
-"""
+"""The review verdict must survive the run that produced it - otherwise a re-ingest
+reports `unchanged` and says nothing about a document waiting on a human."""
 import json
 from datetime import datetime, timezone
 

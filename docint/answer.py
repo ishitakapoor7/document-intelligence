@@ -1,14 +1,10 @@
 """The query path: retrieve -> answer -> verify -> strip / regenerate / refuse.
 
-Citations use real chunk IDs. The model is shown the actual IDs alongside each chunk
-and cites them directly, so nothing has to be translated afterwards and a citation
-cannot drift from what it points at. An ID the model invents simply fails to resolve
-and is stripped deterministically, before any verifier is asked about it.
+Citations are real chunk IDs, shown to the model and cited back directly, so nothing
+is translated afterwards and an invented ID simply fails to resolve.
 
-The verifier is a separate, deliberately ignorant call. It sees one claim, the text of
-one cited chunk, and where that chunk came from - not the question, not the other
-chunks, not the rest of the answer. It cannot be talked into agreement by the framing
-of the question, because it never sees the question.
+The verifier is a separate, deliberately ignorant call: it sees one claim and the
+chunks that claim cites, never the question or the other claims.
 """
 from __future__ import annotations
 
@@ -83,19 +79,11 @@ def _generate(question: str, nodes, rejections: list[StrippedClaim]) -> tuple[Dr
 
 
 def _verify(claim_text: str, sources: list[tuple[str, str]]) -> tuple[Verdict, float]:
-    """Judge one claim against ALL the sources it cites, together.
+    """Judge one claim against the union of the sources it cites.
 
-    The claim is checked against the union of its cited chunks, not against each one
-    separately. An earlier version verified claim-against-single-chunk and rejected
-    every cross-document claim: "the invoiced $156.00 exceeds the contracted $150.00"
-    cannot be supported by the invoice alone or the vendor record alone, so each
-    verdict was individually correct and the answer was destroyed anyway. Cross-document
-    synthesis is the product; a verifier that cannot express it is checking the wrong
-    thing.
-
-    The isolation that matters is preserved: this call never sees the question, the
-    other claims, or any chunk the claim did not cite. It cannot be led by the framing
-    of the question, because it never sees the question.
+    The union, not each chunk separately: cross-document synthesis is the product, and
+    "the invoiced $156.00 exceeds the contracted $150.00" is supported by neither
+    document alone. Isolation from the question and the other claims is preserved.
     """
     rendered = "\n\n".join(f'<source location="{loc}">\n{text}\n</source>'
                             for loc, text in sources)
@@ -126,9 +114,8 @@ def _verify(claim_text: str, sources: list[tuple[str, str]]) -> tuple[Verdict, f
                                       usage.get("output_tokens", 0))
 
 
-# A claim that is flatly false against this corpus, cited to a real retrieved chunk
-# that does not support it. Used only by fault injection (below) to exercise the
-# verifier on demand - the eval cannot wait for a hallucination to occur naturally.
+# False against this corpus, cited to a real chunk that does not support it. Used
+# only by fault injection, so the verifier can be exercised on demand.
 FAULT_CLAIM = ("Acme Industrial Supply Co. applied a 12% early-payment discount to "
                "INV-2026-0117, reducing the amount due to $10,982.40.")
 
@@ -136,19 +123,9 @@ FAULT_CLAIM = ("Acme Industrial Supply Co. applied a 12% early-payment discount 
 def is_refusal(kept: list[Claim], draft: DraftAnswer) -> bool:
     """Is this outcome really a refusal, whatever prose came back with it?
 
-    A standalone predicate because this one rule has been wrong twice, in opposite
-    directions, and both times it silently inflated the answered rate and deflated
-    the abstention rate - the two numbers the system is judged on. Its own function
-    so it has its own test.
-
-      - nothing survived verification: the model returned zero claims and explained
-        it could not answer, which "was anything stripped?" scored as an answer.
-      - claims that do not address the question: an auditor holding only the vendor
-        record returned three true, verified claims prefaced by "the chunks provided
-        don't let me answer this".
-
-    Both mistakes have one shape - inferring status from claim bookkeeping instead of
-    from whether the question was answered.
+    Two cases: nothing survived verification, or the surviving claims are true but do
+    not address the question. Status comes from whether the question was answered, not
+    from claim bookkeeping. Its own predicate so it has its own test.
     """
     return not kept or not draft.answers_question
 
@@ -158,12 +135,9 @@ def answer_question(question: str, principal: str, access_tags: frozenset[str],
                     inject: Literal["none", "once", "always"] = "none") -> QueryTrace:
     """Answer a question, or decline to.
 
-    `inject` plants FAULT_CLAIM into the draft before verification: "once" only in
-    the first round, so the system should strip it, regenerate and recover; "always"
-    in every round, so it should exhaust its attempts and refuse. This is fault
-    INJECTION, not an observed hallucination, and the round records it as such -
-    the alternative is prompting the model until it misbehaves, which measures how
-    hard you pushed rather than what the verifier catches.
+    `inject` plants FAULT_CLAIM before verification: "once" should be stripped and
+    recovered from, "always" should exhaust the attempts and refuse. The round records
+    it, so a stripped claim in a report is never mistaken for a real hallucination.
     """
     started = time.perf_counter()
     trace = QueryTrace(trace_id=uuid.uuid4().hex[:12], question=question,
@@ -210,8 +184,7 @@ def answer_question(question: str, principal: str, access_tags: frozenset[str],
 
         kept: list[Claim] = []
         for claim in draft.claims:
-            # Deterministic gate first: an ID that is not in the retrieved set cannot
-            # be checked and is not worth a model call.
+            # Deterministic gate first: an unresolvable ID is not worth a model call.
             valid = [cid for cid in claim.cited_chunk_ids if cid in by_id]
             invalid = [cid for cid in claim.cited_chunk_ids if cid not in by_id]
             rnd.invalid_citations.extend(invalid)
@@ -238,18 +211,6 @@ def answer_question(question: str, principal: str, access_tags: frozenset[str],
         trace.rounds.append(rnd)
         trace.total_cost_usd += rnd.cost_usd
 
-        # Two ways an answer is really a refusal, and both were found the hard way.
-        #
-        # No verified claims: checking only "was anything stripped" reported `answered`
-        # when the model returned zero claims and explained it could not answer.
-        #
-        # Claims that do not address the question: the external_auditor case returned
-        # three true, verified claims about the one document it could see, prefaced by
-        # "the chunks provided don't let me answer this". Counting claims called that
-        # an answer too. The first fix closed one door of the same mistake - inferring
-        # status from claim bookkeeping instead of from whether the question was
-        # answered - and both errors inflate the answered rate and deflate abstention,
-        # which are the two numbers this system is judged on.
         if is_refusal(kept, draft):
             trace.final_status = "refused"
             trace.refusal_reason = (draft.answer or
@@ -288,8 +249,7 @@ def answer_question(question: str, principal: str, access_tags: frozenset[str],
                 f"sources after {max_rounds} attempts")
 
     trace.total_latency_s = time.perf_counter() - started
-    # Written here rather than in the CLI on purpose: a query that produced an answer
-    # and no audit record is the failure mode this whole file exists to prevent, so
-    # persistence is part of answering, not something a caller can forget.
+    # Persisted here, not in the CLI: an answer without an audit record is the failure
+    # this file exists to prevent, so it cannot be a caller's responsibility.
     save_trace(trace)
     return trace

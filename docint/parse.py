@@ -86,12 +86,8 @@ def ocr_page(page: pymupdf.Page) -> tuple[str, float]:
 # --------------------------------------------------------------------------- #
 
 def raster_coverage(page) -> float:
-    """Fraction of the page covered by its largest raster image.
-
-    The largest rather than the sum, because overlapping images would otherwise
-    total more than the page. This is how a scan is recognised even when it carries
-    an inherited text layer - see RASTER_PAGE_COVERAGE in config.
-    """
+    """Fraction of the page covered by its largest raster image - largest rather than
+    sum, since overlapping images would total more than the page."""
     images = page.get_images(full=True)
     if not images:
         return 0.0
@@ -109,12 +105,10 @@ def raster_coverage(page) -> float:
 
 
 def parse_pdf(path: Path, doc_hash: str, access_tag: str) -> tuple[list[Chunk], FileType, float | None, int]:
-    """One chunk per page. Each page independently takes the text-layer or OCR path.
+    """One chunk per page, each taking the text-layer or OCR path independently.
 
-    Real-world PDFs are frequently mixed - a born-digital cover page in front of
-    scanned attachments - so the decision is per page, not per file. The document
-    is labelled `pdf_scanned` if ANY page needed OCR, since that is what determines
-    whether its content carries recognition risk.
+    Per page, not per file: real PDFs mix born-digital covers with scanned
+    attachments. The document is `pdf_scanned` if any page needed OCR.
     """
     pdf = pymupdf.open(path)
     chunks: list[Chunk] = []
@@ -127,11 +121,9 @@ def parse_pdf(path: Path, doc_hash: str, access_tag: str) -> tuple[list[Chunk], 
             text = page.get_text().strip()
             confidence: float | None = None
 
-            # Two ways a page earns OCR: it has almost no text, or it is a raster
-            # scan that merely came with text attached. In the second case the
-            # inherited layer is DISCARDED rather than merged - a value this system
-            # asserts should be one it measured the reading of, and text of unknown
-            # provenance carries no confidence to attach to a citation.
+            # Two ways to earn OCR: almost no text, or a raster scan that merely came
+            # with text attached. The inherited layer is discarded rather than merged -
+            # it carries no confidence to attach to a citation.
             if len(text) < MIN_TEXT_LAYER_CHARS or raster_coverage(page) >= RASTER_PAGE_COVERAGE:
                 text, confidence = ocr_page(page)
                 used_ocr = True
