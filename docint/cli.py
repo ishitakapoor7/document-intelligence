@@ -146,6 +146,52 @@ def cmd_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Check the things a fresh clone gets wrong, before they fail mid-pipeline.
+
+    Every check here corresponds to a failure that actually happened during this
+    build: a missing binary, a missing key, an empty index that makes `ask` refuse
+    for the wrong reason.
+    """
+    import os
+    import shutil
+
+    from docint.config import CHROMA_DIR, MANIFEST_PATH
+
+    ok = True
+
+    def report(label: str, good: bool, detail: str) -> None:
+        nonlocal ok
+        ok = ok and good
+        print(f"  {'OK  ' if good else 'FAIL'}  {label:<22} {detail}")
+
+    print("\nenvironment")
+    tess = shutil.which("tesseract")
+    report("tesseract", tess is not None,
+           tess or "not on PATH - scanned PDFs cannot be read (brew install tesseract)")
+
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    report("ANTHROPIC_API_KEY", bool(key),
+           f"set, {len(key)} chars" if key else "missing - put it in .env at the repo root")
+
+    print("\nstate")
+    indexed = 0
+    if CHROMA_DIR.exists():
+        try:
+            from docint.index import open_index
+            indexed = open_index().vector_store.client.count()
+        except Exception as exc:                      # noqa: BLE001 - diagnostic only
+            report("vector store", False, f"unreadable: {exc}")
+    report("indexed chunks", indexed > 0,
+           f"{indexed} chunks" if indexed else "empty - run `make ingest` first, "
+           "or `ask` will refuse because nothing is retrievable")
+    report("manifest", MANIFEST_PATH.exists(),
+           str(MANIFEST_PATH) if MANIFEST_PATH.exists() else "absent - no ingest has run yet")
+
+    print()
+    return 0 if ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="docint", description="Document intelligence layer")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -173,6 +219,9 @@ def main(argv: list[str] | None = None) -> int:
     p_show.add_argument("--as", dest="as_profile", default="procurement_analyst",
                         choices=sorted(ACCESS_PROFILES))
     p_show.set_defaults(func=cmd_show)
+
+    p_doctor = sub.add_parser("doctor", help="check the environment and index state")
+    p_doctor.set_defaults(func=cmd_doctor)
 
     args = parser.parse_args(argv)
     return args.func(args)
