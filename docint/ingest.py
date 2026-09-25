@@ -42,7 +42,8 @@ def save_manifest(manifest: dict[str, ManifestEntry]) -> None:
 
 def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
                     force: bool = False, vision_fallback: bool = True,
-                    force_vision: bool = False, index=None) -> IngestOutcome:
+                    force_vision: bool = False, persist: bool = True,
+                    index=None) -> IngestOutcome:
     path = Path(path)
     started = time.perf_counter()
 
@@ -77,7 +78,8 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
 
     # 4. Classify. An unclear document becomes `unknown` rather than forced into a
     #    label; classification survives poor recognition better than extraction does.
-    document.document_type, document.classification_confidence = classify(chunks)
+    (document.document_type, document.classification_confidence,
+     document.classification_cost_usd) = classify(chunks)
     chunks = finalize_chunks(chunks, document)
 
     # 5. Quality floor, on the MEASURED confidence, before the `unknown`
@@ -94,7 +96,7 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
             + "; extraction skipped rather than asserting values read from text we cannot trust."
             + (f" Classified `{document.document_type}`, which is itself unreliable at this "
                f"confidence." if document.document_type == "unknown" else ""))
-        return _finish(manifest, document, chunks, started, index)
+        return _finish(manifest, document, chunks, started, index, persist)
 
     if document.document_type == "unknown":
         unreadable = effective is not None and effective < MIN_OCR_CONFIDENCE
@@ -106,7 +108,7 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
             if unreadable else
             f"classification confidence {document.classification_confidence:.2f} below "
             f"threshold, or no configured type fits; no schema to extract against")
-        return _finish(manifest, document, chunks, started, index)
+        return _finish(manifest, document, chunks, started, index, persist)
 
     # 6. Extract.
     document.fields, document.line_items, document.extraction_cost_usd = extract(document, chunks)
@@ -141,7 +143,7 @@ def ingest_document(path: Path, manifest: dict[str, ManifestEntry], *,
     else:
         document.status = "extracted"
 
-    return _finish(manifest, document, chunks, started, index)
+    return _finish(manifest, document, chunks, started, index, persist)
 
 
 def _missing_required(document: Document) -> list[str]:
@@ -164,7 +166,7 @@ def _escalate(path: Path, chunks: list[Chunk], document: Document) -> list[Chunk
 
 
 def _finish(manifest, document: Document, chunks: list[Chunk], started: float,
-            index=None) -> IngestOutcome:
+            index=None, persist: bool = True) -> IngestOutcome:
     # Indexed regardless of status: a document in review is still findable, it just
     # carries no asserted values. Hiding it would make questions about it return
     # nothing rather than a flagged answer.
@@ -172,6 +174,12 @@ def _finish(manifest, document: Document, chunks: list[Chunk], started: float,
         from docint.index import upsert
         upsert(index, chunks)
     document.total_latency_s = time.perf_counter() - started
+    # The record is the product of this pipeline, so it is written here rather than by
+    # a caller: an extraction nobody can consume is the failure this stage exists to
+    # avoid. Written after latency is set so the record carries it.
+    if persist:
+        from docint.record import save as save_record
+        save_record(document)
     manifest[document.source_id] = ManifestEntry(
         source_id=document.source_id,
         content_hash=document.content_hash,
@@ -191,10 +199,17 @@ def _finish(manifest, document: Document, chunks: list[Chunk], started: float,
 
 
 def ingest_directory(directory: Path, *, force: bool = False, vision_fallback: bool = True,
-                     force_vision: bool = False,
+                     force_vision: bool = False, persist: bool = True,
                      index=None) -> list[tuple[Path, IngestOutcome]]:
-    manifest = load_manifest()
-    if index is None:
+    """Ingest every file in a directory.
+
+    `persist=False` runs the full pipeline and writes nothing: no index, no manifest, no
+    record. It answers "what would this document do" without committing it to the store,
+    which is the only way to exercise a failing document against a corpus you do not
+    want it in.
+    """
+    manifest = load_manifest() if persist else {}
+    if index is None and persist:
         from docint.index import open_index
         index = open_index()
     results = []
@@ -203,6 +218,8 @@ def ingest_directory(directory: Path, *, force: bool = False, vision_fallback: b
             continue
         results.append((path, ingest_document(path, manifest, force=force,
                                               vision_fallback=vision_fallback,
-                                              force_vision=force_vision, index=index)))
-    save_manifest(manifest)
+                                              force_vision=force_vision,
+                                              persist=persist, index=index)))
+    if persist:
+        save_manifest(manifest)
     return results

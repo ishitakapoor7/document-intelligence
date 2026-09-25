@@ -81,16 +81,19 @@ def _print_outcome(path: Path, outcome: IngestOutcome) -> None:
             desc = (item.description or "")[:42]
             print(f"      {desc:<44} qty={str(item.quantity):<8} "
                   f"unit={str(item.unit_price):<10} amt={item.amount}")
-    print(f"    cost/latency ${doc.extraction_cost_usd + doc.ocr.fallback_cost_usd:.4f}"
+    print(f"    cost/latency ${doc.classification_cost_usd + doc.extraction_cost_usd + doc.ocr.fallback_cost_usd:.4f}"
           f"  /  {doc.total_latency_s:.1f}s")
 
 
 def cmd_ingest(args: argparse.Namespace) -> int:
     directory = Path(args.path)
-    print(f"\ningesting {directory}/")
+    print(f"\ningesting {directory}/"
+          + (f"  {BOLD}[dry run - nothing will be indexed or recorded]{RESET}"
+             if args.dry_run else ""))
     results = ingest_directory(directory, force=args.force,
                                vision_fallback=not args.no_vision_fallback,
-                               force_vision=args.force_vision)
+                               force_vision=args.force_vision,
+                               persist=not args.dry_run)
 
     counts: dict[str, int] = {}
     for path, outcome in results:
@@ -106,6 +109,49 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _progress_printer(verbose: bool):
+    """Narrate the wait. A question spends most of its time inside model calls, and
+    twenty seconds of blank terminal reads as a hang.
+
+    Plain stage names by default; `--verbose` adds what each stage actually did. The
+    tick per verified claim is the point - it moves during the longest phase, so the
+    run visibly progresses rather than just sitting there.
+
+    Deliberately not part of `trace.render`, which renders the saved JSON and remains
+    the only account of the RESULT. This describes the process and is not kept.
+    """
+    def emit(event: str, **f) -> None:
+        if event == "retrieved":
+            detail = (f"  {f['chunks']} chunk(s) from {f['documents']} document(s), "
+                      f"access filter applied in the store" if verbose else "")
+            print(f"  {DIM}searching the documents you can access{detail}{RESET}")
+        elif event == "records" and verbose and f["documents"]:
+            print(f"  {DIM}reading typed records for {f['documents']} document(s){RESET}")
+        elif event == "drafting":
+            label = "drafting an answer" if f["round_index"] == 0 else "revising the answer"
+            print(f"  {DIM}{label}{RESET}", end="", flush=True)
+        elif event == "drafted":
+            detail = f"  {f['claims']} claim(s)" if verbose else ""
+            print(f"{DIM}{detail}{RESET}")
+        elif event == "verifying":
+            detail = f"  {f['total']} claim(s), each against only its own sources" if verbose else ""
+            print(f"  {DIM}checking every claim against its source{detail}  {RESET}",
+                  end="", flush=True)
+        elif event == "verified":
+            print("✓" if f["supported"] else "✗", end="", flush=True)
+        elif event == "round_done":
+            detail = f"  {f['verified']} verified, {f['stripped']} stripped" if verbose else ""
+            print(f"{DIM}{detail}{RESET}")
+        elif event == "regenerating":
+            detail = f"  {f['stripped']} claim(s) did not hold up" if verbose else ""
+            print(f"  {DIM}revising{detail}{RESET}")
+        elif event == "synthesizing":
+            detail = f"  from {f['claims']} verified claim(s)" if verbose else ""
+            print(f"  {DIM}writing the answer{detail}{RESET}")
+
+    return emit
+
+
 def cmd_ask(args: argparse.Namespace) -> int:
     from docint.answer import answer_question
     from docint.trace import render, trace_path
@@ -115,9 +161,13 @@ def cmd_ask(args: argparse.Namespace) -> int:
         print(f"unknown profile {args.as_profile!r}; known: {', '.join(sorted(ACCESS_PROFILES))}")
         return 2
 
-    trace = answer_question(args.question, args.as_profile, tags, inject=args.inject)
-    print(render(trace))
-    print(f"{DIM}  audit trace written to {trace_path(trace.trace_id)}{RESET}\n")
+    print()
+    trace = answer_question(args.question, args.as_profile, tags, inject=args.inject,
+                            on_event=_progress_printer(args.verbose))
+    print(render(trace, verbose=args.verbose))
+    print(f"\n{DIM}  docint show <chunk_id>      the page or cell a citation points at")
+    print(f"  docint ask ... --verbose    what was retrieved, drafted and stripped")
+    print(f"  every claim and verdict:   {trace_path(trace.trace_id)}{RESET}\n")
     return 0
 
 
@@ -150,6 +200,54 @@ def cmd_show(args: argparse.Namespace) -> int:
           f"  ·  access_tag {chunk['access_tag']}{RESET}\n")
     print("\n".join(f"    {line}" for line in chunk["text"].splitlines()))
     print()
+    return 0
+
+
+def cmd_record(args: argparse.Namespace) -> int:
+    """Print the structured record extraction produced for one document.
+
+    The record, not the index, is what a downstream consumer reads - an ERP three-way
+    match or a spend report wants typed fields, not retrieved prose.
+    """
+    from docint.record import load, record_path
+    from docint.parse import source_id as source_id_for
+
+    source = source_id_for(Path(args.path))
+    document = load(source)
+    if document is None:
+        print(f"\n  no record for {source!r} - run `docint ingest` first")
+        print(f"  {DIM}expected at {record_path(source)}{RESET}\n")
+        return 1
+
+    tags = ACCESS_PROFILES.get(args.as_profile)
+    if tags is None:
+        print(f"unknown profile {args.as_profile!r}; known: {', '.join(sorted(ACCESS_PROFILES))}")
+        return 2
+    # Same rule as `show`: a record is the document's contents in typed form, so it
+    # carries the document's ACL.
+    if document.access_tag not in tags:
+        print(f"\n  {BOLD}access denied{RESET}  {args.as_profile} is not cleared for this document\n")
+        return 3
+
+    print(f"\n  {BOLD}{document.filename}{RESET}{STATUS_BANNER.get(document.status, '')}")
+    print(f"  {DIM}{document.document_type} · {document.document_id} · "
+          f"version {document.content_hash[:12]} · access_tag {document.access_tag}{RESET}\n")
+
+    if not document.fields and not document.line_items:
+        print(f"    {DIM}no extracted values - {document.review_reason or 'nothing to extract'}{RESET}\n")
+        return 0
+
+    for field in document.fields:
+        flag = f"  {BOLD}LOW-CONFIDENCE{RESET}" if field.low_confidence else ""
+        print(f"    {field.name:<26} {str(field.value):<32} {DIM}{field.chunk_id}{RESET}{flag}")
+    if document.missing_required_fields:
+        print(f"\n    {BOLD}missing{RESET}  {', '.join(document.missing_required_fields)}")
+    if document.line_items:
+        print(f"\n    {len(document.line_items)} line item(s)")
+        for item in document.line_items:
+            print(f"      {(item.description or '')[:42]:<44} qty={str(item.quantity):<8} "
+                  f"unit={str(item.unit_price):<10} amt={item.amount}")
+    print(f"\n  {DIM}every value above resolves with: docint show <chunk_id>{RESET}\n")
     return 0
 
 
@@ -245,6 +343,10 @@ def main(argv: list[str] | None = None) -> int:
                                "found, not the ones it dropped")
     p_ingest.add_argument("--force", action="store_true",
                           help="re-ingest even if the content hash is already in the manifest")
+    p_ingest.add_argument("--dry-run", action="store_true",
+                          help="run the full pipeline but write nothing - no index, no "
+                               "manifest, no record. Shows what a document would do "
+                               "without committing it to the corpus you query")
     p_ingest.set_defaults(func=cmd_ingest)
 
     p_ask = sub.add_parser("ask", help="ask a question of the ingested corpus")
@@ -255,6 +357,9 @@ def main(argv: list[str] | None = None) -> int:
     p_ask.add_argument("--inject", choices=["none", "once", "always"], default="none",
                        help="plant an unsupported claim to exercise the verifier: "
                             "`once` should be stripped and recovered from, `always` refused")
+    p_ask.add_argument("--verbose", action="store_true",
+                       help="show what the run did - retrieval, drafting, what was "
+                            "stripped and why, cost and latency")
     p_ask.set_defaults(func=cmd_ask)
 
     p_show = sub.add_parser("show", help="print the chunk a citation points at")
@@ -262,6 +367,12 @@ def main(argv: list[str] | None = None) -> int:
     p_show.add_argument("--as", dest="as_profile", default="procurement_analyst",
                         choices=sorted(ACCESS_PROFILES))
     p_show.set_defaults(func=cmd_show)
+
+    p_record = sub.add_parser("record", help="print the structured record for one document")
+    p_record.add_argument("path", help="path to the source document, e.g. corpus/procurement/invoice_acme_001.pdf")
+    p_record.add_argument("--as", dest="as_profile", default="procurement_analyst",
+                          choices=sorted(ACCESS_PROFILES))
+    p_record.set_defaults(func=cmd_record)
 
     p_review = sub.add_parser("review", help="list documents waiting on a human, and why")
     p_review.set_defaults(func=cmd_review)

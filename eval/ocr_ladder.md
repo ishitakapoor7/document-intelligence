@@ -25,9 +25,13 @@ re-renders the already-degraded image-only PDF back up to 300 DPI, and that upsc
 adds interpolation damage the probe never saw. The true figure was 41.3 — a 35-point
 error, enough to put the threshold in the wrong place.
 
+Fix: Stopped using a separate probe, and used the real pipeline instead
+
 **A cliff is not a gradient.** The first parameter set gave 95.1 → 44.4 → 0.0, with
 Tesseract returning no words at all at the bottom. That makes the interesting middle
 state — readable enough to extract, poor enough to distrust — untestable.
+
+Fix: Retuned the degradation knobs (actual blur/noise/JPEG-quality/rotation value) iteratively 
 
 ## Confidence and correctness
 
@@ -45,6 +49,12 @@ field deficit as well as on low confidence (`eval/holdout_findings.md` §2).
 
 The thresholds on this page are calibrated against a corpus that does not contain that
 failure mode.
+
+Fix: Added a claude vision fallback when required fields are missing, if still missing after
+claude vision, escalate to human review. This conditional block only runs on pdfs classified
+as scanned, so added a raster_coverage() function which checks how much of the page's
+visible area is a single embedded image. A genuinely digital pdf would only have small 
+embedded images such as logos. 
 
 ## Still missing: confidently wrong OCR
 

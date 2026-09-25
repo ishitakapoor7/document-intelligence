@@ -71,7 +71,8 @@ def evaluate(gold_path: Path, doc_dir: Path, label: str,
 
         outcome = ingest_document(path, {})
         if outcome.document is not None:
-            SPEND.append(outcome.document.extraction_cost_usd
+            SPEND.append(outcome.document.classification_cost_usd
+                         + outcome.document.extraction_cost_usd
                          + outcome.document.ocr.fallback_cost_usd)
         doc = outcome.document
         got = {f.name: f for f in (doc.fields if doc else [])}
@@ -227,7 +228,7 @@ def degraded_table(paths: list[Path]) -> None:
             tess = f"{d.ocr.tesseract_confidence:.1f}" if d.ocr.tesseract_confidence is not None else "-"
             post = f"{d.ocr.post_fallback_confidence:.1f}" if d.ocr.post_fallback_confidence is not None else "-"
             missing = ",".join(d.missing_required_fields) or "-"
-            cost = d.extraction_cost_usd + d.ocr.fallback_cost_usd
+            cost = d.classification_cost_usd + d.extraction_cost_usd + d.ocr.fallback_cost_usd
             name = path.name if not allow else ""
             print(f"{name:<32}{'yes' if allow else 'no':<5}{d.document_type:<16}{tess:>6}{post:>7}"
                   f"{d.status:>30}{missing:>18}{cost:>9.4f}{d.total_latency_s:>6.1f}")

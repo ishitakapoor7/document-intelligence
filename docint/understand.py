@@ -84,23 +84,30 @@ unknown
     confident guess."""
 
 
-def classify(chunks: list[Chunk]) -> tuple[DocumentType, float]:
-    """Assign a document type, or `unknown` rather than forcing a bad label."""
+def classify(chunks: list[Chunk]) -> tuple[DocumentType, float, float]:
+    """Assign a document type, or `unknown` rather than forcing a bad label.
+
+    Returns (label, confidence, cost in USD).
+    """
     sample = "\n\n".join(c.text for c in chunks[:2])[:6000]
 
     llm = ChatAnthropic(model=MODEL_CLASSIFY, max_tokens=1024)
-    verdict = llm.with_structured_output(_Verdict).invoke(
+    result = llm.with_structured_output(_Verdict, include_raw=True).invoke(
         f"{UNTRUSTED}\n\n"
         "Classify this document using these definitions.\n\n"
         f"{TYPE_DEFINITIONS}\n\n"
         f"<document>\n{sample}\n</document>"
     )
+    verdict = result["parsed"]
+    raw = result.get("raw")
+    usage = (raw.usage_metadata or {}) if raw is not None else {}
+    cost = usd_cost(MODEL_CLASSIFY, usage.get("input_tokens", 0), usage.get("output_tokens", 0))
 
     label, confidence = verdict.document_type.strip(), verdict.confidence
 
     # Guard 1 (hard): an off-taxonomy answer becomes unknown, never a new label.
     if label not in FIELD_SPECS:
-        return "unknown", confidence
+        return "unknown", confidence, cost
 
     # Deterministic cross-check: disagreement with the keyword prior costs confidence.
     # The only guard here - evidence grounding belongs in extract(), where a wrong
@@ -110,8 +117,8 @@ def classify(chunks: list[Chunk]) -> tuple[DocumentType, float]:
         confidence *= 0.5
 
     if confidence < MIN_CLASSIFY_CONFIDENCE:
-        return "unknown", confidence
-    return label, confidence  # type: ignore[return-value]
+        return "unknown", confidence, cost
+    return label, confidence, cost  # type: ignore[return-value]
 
 
 # --------------------------------------------------------------------------- #

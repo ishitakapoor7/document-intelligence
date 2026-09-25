@@ -145,6 +145,21 @@ def score(case: dict, trace: QueryTrace, cited: dict[str, dict]) -> Result:
     r.check("no planted claim in the final answer",
             not any(FAULT_CLAIM in c.text for c in trace.kept_claims))
 
+    # The response layer, as invariants rather than gold: an answered case must produce
+    # one, and it may only cite evidence drawn from claims that passed verification.
+    # Needs no ground truth, so it runs on every case.
+    if trace.final_status == "answered":
+        r.check("synthesized a response", trace.response is not None)
+        if trace.response is not None:
+            grounded = {cid for c in trace.kept_claims for cid in c.cited_chunk_ids}
+            for e in trace.response.evidence:
+                r.check(f"evidence {e.chunk_id} is a verified claim",
+                        e.chunk_id in grounded,
+                        "cites a chunk no verified claim rests on")
+            r.check("no planted claim reached the response",
+                    FAULT_CLAIM not in trace.response.summary
+                    and not any(FAULT_CLAIM in e.claim for e in trace.response.evidence))
+
     return r
 
 
@@ -186,6 +201,8 @@ def report(results: list[Result]) -> str:
     cite_checks = [c for r in results for c in r.checks
                    if "in gold sources" in c[0] or "resolves" in c[0]]
     acl_checks = [c for r in results for c in r.checks if c[0].startswith("withheld ")]
+    resp_checks = [c for r in results for c in r.checks
+                   if c[0].startswith("evidence ") or c[0] == "synthesized a response"]
 
     total_stripped = sum(len(s.stripped) for r in results for s in r.trace.rounds)
     total_claims = sum(len(s.claims) for r in results for s in r.trace.rounds)
@@ -212,6 +229,7 @@ def report(results: list[Result]) -> str:
         f"| answer states the gold figure | {len(entity_checks)} | {frac(entity_checks)} |",
         f"| citation resolves and lands in a gold source | {len(cite_checks)} | {frac(cite_checks)} |",
         f"| withheld document stayed withheld | {len(acl_checks)} | {frac(acl_checks)} |",
+        f"| response cites only verified claims | {len(resp_checks)} | {frac(resp_checks)} |",
         f"| unresolvable citation IDs emitted | {total_claims} claims | {invalid} |",
         f"| planted claim reached the user | {injected} injected | "
         f"{sum(1 for r in results if any(FAULT_CLAIM in c.text for c in r.trace.kept_claims))} |",

@@ -7,8 +7,10 @@ without being taken on trust.
 It classifies each document, extracts typed fields anchored to a page or cell, and
 answers questions spanning several documents. Every claim in an answer is checked
 against the specific chunk it cites; claims that fail are removed, and if none
-survive, it refuses. Documents it cannot read well enough are routed to human review
-rather than guessed at.
+survive, it refuses. What surfaces is a short verdict with the evidence it rests on,
+synthesized from the surviving claims alone — the full claim record stays in the
+trace. Documents it cannot read well enough are routed to human review rather than
+guessed at.
 
 It sits in front of a retrieval system rather than replacing one. It is a prototype,
 not a product: three document types, one folder, one machine.
@@ -24,17 +26,30 @@ python -m docint.cli ingest corpus/  # parse, classify, extract - run it twice
 python -m docint.cli ask "Did Acme bill us above their contracted rate on INV-2026-0117, and does the invoice stay within what PO-2026-0043 committed?"
 ```
 
-The second `ingest` prints `3 unchanged` and makes no model calls. The answer cites a
-chunk id per claim; `docint show <chunk_id>` prints the page or cell it came from, and
-`docint review` lists anything waiting on a human. Nothing needs a service or a
+The second `ingest` prints `4 unchanged` and makes no model calls. The answer cites a
+chunk id per piece of evidence; `docint show <chunk_id>` prints the page or cell it
+came from, `docint ask ... --verbose` shows what was retrieved, drafted and stripped,
+and `docint review` lists anything waiting on a human. Nothing needs a service or a
 database.
+
+Ingestion's output is a structured record per document, written to `runs/records/` and
+versioned by content hash, with every field tagged by the chunk it was read from:
+
+```bash
+python -m docint.cli record corpus/procurement/invoice_acme_001.pdf
+```
+
+That record is what a downstream consumer reads - a three-way match or a spend report
+wants typed fields, not retrieved prose - and it is also put in front of the answer
+model, so a figure in an answer is the figure in the record rather than one re-derived
+from the page.
 
 Evaluation, which makes live model calls:
 
 ```bash
 python eval/run_ingest_eval.py   # ingestion, 14 documents across 3 sets  (~$1.20)
-python eval/harness.py           # query path, 7 cases -> runs/report.md  (~$0.50)
-python -m pytest tests/ -q       # 21 unit tests, offline
+python eval/harness.py           # query path, 7 cases -> runs/report.md  (~$0.60)
+python -m pytest tests/ -q       # 33 unit tests, offline
 ```
 
 ## Architecture
@@ -54,14 +69,20 @@ python -m pytest tests/ -q       # 21 unit tests, offline
                              │ still unreadable               │
                              ▼                                ▼
                           human review              retrieve ── access filter
-                                                       applied inside the store
-                                                          │
-                                                          ▼
+                                │                      applied inside the store
+                                ▼                           │
+                       runs/records/<doc>.json ────────────►│  typed fields, each
+                       versioned structured record          │  tagged by chunk_id
+                                                            ▼
                                              answer ──► verify each claim
                                               opus       haiku, sees only the
                                                 │        claim + cited chunk
                                                 ▼
                                     strip → regenerate once → refuse
+                                                │
+                                                ▼
+                                          synthesize ── verdict + ≤2 evidence,
+                                            opus        from verified claims only
                                                 │
                                                 ▼
                                       runs/<trace_id>.json
@@ -78,8 +99,9 @@ python -m pytest tests/ -q       # 21 unit tests, offline
 - **What works.** Classification 14/14 across all three sets, including four
   documents correctly typed `unknown` rather than forced into a schema. No value was
   invented anywhere: 0 hallucinations across 51 scored fields. On the query path,
-  7/7 cases reached the right verdict, 46/46 citations resolved into a gold-approved
-  source, and no unauthorised chunk reached a principal who should not see it. Every
+  7/7 cases reached the right verdict, 50/50 citations resolved into a gold-approved
+  source, every synthesized answer cited only claims that had passed verification
+  (12/12), and no unauthorised chunk reached a principal who should not see it. Every
   remaining extraction error on real external documents is an abstention, not a
   wrong answer.
 
@@ -104,7 +126,7 @@ python -m pytest tests/ -q       # 21 unit tests, offline
 
 ```
 docint/     models · config · parse · understand · vision_ocr
-            index · ingest · answer · trace · cli
+            index · ingest · record · answer · respond · trace · cli
 eval/       gold + findings for all three document sets, plus both harnesses
-runs/       manifest.json · <trace_id>.json · report.md
+runs/       manifest.json · records/ · <trace_id>.json · report.md
 ```

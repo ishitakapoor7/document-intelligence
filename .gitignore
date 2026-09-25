@@ -5,6 +5,7 @@ __pycache__/
 runs/_build/
 runs/chroma/
 runs/*.json
+runs/records/
 .pytest_cache/
 .DS_Store
 Makefile

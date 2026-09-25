@@ -10,6 +10,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from docint.config import RESPONSE_MAX_EVIDENCE
+
 FileType = Literal["pdf_digital", "pdf_scanned", "xlsx"]
 DocumentType = Literal["invoice", "purchase_order", "vendor_record", "unknown"]
 
@@ -142,6 +144,7 @@ class Document(BaseModel):
     missing_before_escalation: list[str] = Field(default_factory=list)
 
     ocr: OcrTelemetry = Field(default_factory=OcrTelemetry)
+    classification_cost_usd: float = 0.0
     extraction_cost_usd: float = 0.0
     total_latency_s: float = 0.0
 
@@ -159,7 +162,6 @@ class Document(BaseModel):
         `ocr.post_fallback_confidence`, labelled model-graded wherever it is shown.
         """
         return self.ocr.tesseract_confidence
-
 
 class ManifestEntry(BaseModel):
     """What is currently indexed for one source file.
@@ -185,7 +187,6 @@ class ManifestEntry(BaseModel):
     missing_required_fields: list[str] = Field(default_factory=list)
     ocr_mean_confidence: float | None = None
 
-
 class IngestOutcome(BaseModel):
     """What happened to one file. Status mirrors DocumentStatus, so there is one
     vocabulary rather than two that can disagree."""
@@ -201,11 +202,7 @@ class IngestOutcome(BaseModel):
     def did_work(self) -> bool:
         return self.status != "unchanged"
 
-
-# --------------------------------------------------------------------------- #
 # Query path
-# --------------------------------------------------------------------------- #
-
 class Claim(BaseModel):
     """One factual assertion, and the chunks it rests on. `cited_chunk_ids` are real
     chunk IDs, so nothing translates between what was said and what it resolves to."""
@@ -265,6 +262,20 @@ class GenerationRound(BaseModel):
     injected_claim: str | None = None
 
 
+class Evidence(BaseModel):
+    """One verified claim, and where it resolves to. The user-facing citation."""
+    document_id: str
+    chunk_id: str
+    claim: str
+
+class SynthesizedAnswer(BaseModel):
+    """User facing answer: verdict, summary and evidence."""
+    answer: Literal["yes", "no", "unknown", "not_applicable"]
+    summary: str
+    evidence: list[Evidence] = Field(default_factory=list,
+                                     max_length=RESPONSE_MAX_EVIDENCE)
+
+
 QueryStatus = Literal["answered", "refused", "human_review"]
 
 
@@ -281,6 +292,8 @@ class QueryTrace(BaseModel):
 
     retrieved_chunk_ids: list[str] = Field(default_factory=list)
     retrieved_documents: list[str] = Field(default_factory=list)
+    # Typed records put in front of the answer model, beyond raw chunk text.
+    structured_records: list[str] = Field(default_factory=list)
     rounds: list[GenerationRound] = Field(default_factory=list)
     regeneration_count: int = 0
 
@@ -288,6 +301,9 @@ class QueryTrace(BaseModel):
     final_answer: str | None = None
     kept_claims: list[Claim] = Field(default_factory=list)
     final_citations: list[Citation] = Field(default_factory=list)
+    # What the user is shown. Built from kept_claims and nothing else; absent on a
+    # refusal, where the refusal reason is already the answer.
+    response: SynthesizedAnswer | None = None
     refusal_reason: str | None = None
     review_reason: str | None = None
 

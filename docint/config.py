@@ -8,8 +8,6 @@ from typing import Literal
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
-# Explicit path: find_dotenv() walks the caller's stack frame, which is absent when
-# the entry point has none (e.g. `python - <<EOF`).
 load_dotenv(dotenv_path=ROOT / ".env")
 
 CORPUS_DIR = ROOT / "corpus"
@@ -17,45 +15,43 @@ RUNS_DIR = ROOT / "runs"
 MANIFEST_PATH = RUNS_DIR / "manifest.json"
 CHROMA_DIR = RUNS_DIR / "chroma"
 
-# --------------------------------------------------------------------------- #
 # Models
-# --------------------------------------------------------------------------- #
 MODEL_CLASSIFY = "claude-haiku-4-5"
 MODEL_EXTRACT = "claude-opus-5"
 MODEL_VERIFY = "claude-haiku-4-5"
 MODEL_ANSWER = "claude-opus-5"
 MODEL_VISION = "claude-opus-5"
+MODEL_RESPOND = "claude-opus-5"
 
-# --------------------------------------------------------------------------- #
 # Thresholds
-# --------------------------------------------------------------------------- #
-# OCR thresholds are measured, not guessed: the same purchase order at three scan
-# qualities reads 95.1 / 62.4 / 43.4. See eval/ocr_ladder.md.
+# OCR thresholds are measured, see eval/ocr_ladder.py 
 
 MIN_OCR_CONFIDENCE = 55.0      # below: human review, extraction skipped
 LOW_CONFIDENCE_FIELD = 75.0    # below: extract, but flag every field
 MIN_CLASSIFY_CONFIDENCE = 0.60  # below: `unknown` rather than a forced label
 
-# Below this Tesseract confidence, escalate the page to vision. Set at the field-flag
-# threshold: if values would be surfaced as untrusted anyway, a better read is worth
-# one call.
+# Below this Tesseract confidence, page is escalated to vision.
 MIN_OCR_FOR_VISION_FALLBACK = 75.0
 
 # A PDF page yielding fewer characters than this is treated as a scan.
 MIN_TEXT_LAYER_CHARS = 100
 
-# A text layer is not evidence that a page was born digital - archived documents are
-# usually scans somebody else already OCR'd, and that inherited text carries no
-# confidence and no provenance. A page mostly covered by a raster image is a scan
-# whatever text rides along with it, which is structural rather than a guess.
+# if > 80% of the page is white space, classify it as a scan.
 RASTER_PAGE_COVERAGE = 0.80
 
 OCR_RENDER_DPI = 300
 
-# top_k is generous because the corpus is small; at three documents it returns most
-# of it, so retrieval quality is not yet a variable.
+# top_k is generous because the corpus is small
 RETRIEVAL_TOP_K = 8
 MIN_RETRIEVAL_SCORE = 0.25
+
+# Claims are verified concurrently; the verifier sees one claim and only its own cited
+# chunks, so there is no shared state between calls.
+VERIFY_MAX_WORKERS = 12
+
+# Response synthesis: how many pieces of evidence the user-facing answer may cite.
+# Bounds what the user reads; the full verified-claim record is unaffected.
+RESPONSE_MAX_EVIDENCE = 2
 
 # USD per million tokens.
 PRICING = {
@@ -63,20 +59,14 @@ PRICING = {
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00},
 }
 
-
 def usd_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     p = PRICING.get(model)
     if not p:
         return 0.0
     return (input_tokens * p["input"] + output_tokens * p["output"]) / 1_000_000
 
-
-# --------------------------------------------------------------------------- #
-# Extraction schemas - plain data, so a new document type is a config change
-# --------------------------------------------------------------------------- #
-
+# Extraction schemas
 FieldKind = Literal["identifier", "string", "date", "currency", "number", "line_items"]
-
 
 @dataclass(frozen=True)
 class FieldSpec:
@@ -85,10 +75,7 @@ class FieldSpec:
     description: str
     required: bool = False   # absent required field -> human review, type preserved
 
-
-# Scalars describe the document; repeating rows live in line_items[]. Holding
-# quantity or unit_price as a scalar silently returns row 1 of N on a multi-line
-# invoice, with nothing marking it partial.
+# Scalars describe the document; repeating rows live in line_items[].
 FIELD_SPECS: dict[str, tuple[FieldSpec, ...]] = {
     "invoice": (
         FieldSpec("invoice_number", "identifier", "the invoice's own number, e.g. INV-2026-0117", required=True),
@@ -116,14 +103,11 @@ FIELD_SPECS: dict[str, tuple[FieldSpec, ...]] = {
     ),
 }
 
-
 def required_fields(document_type: str) -> tuple[str, ...]:
     return tuple(f.name for f in FIELD_SPECS.get(document_type, ()) if f.required)
 
-
 def scalar_fields(document_type: str) -> tuple[FieldSpec, ...]:
     return tuple(f for f in FIELD_SPECS.get(document_type, ()) if f.kind != "line_items")
-
 
 DOCUMENT_TYPES = tuple(FIELD_SPECS) + ("unknown",)
 
@@ -156,10 +140,8 @@ ACCESS_PROFILES: dict[str, frozenset[str]] = {
     "external_auditor":    frozenset({"general"}),
 }
 
-
 def known_access_tags() -> frozenset[str]:
     return frozenset().union(*ACCESS_PROFILES.values())
-
 
 def access_tag_for(path) -> str:
     """Derive a document's access tag from the directory it lives in."""

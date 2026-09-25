@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
 from langchain_anthropic import ChatAnthropic
@@ -20,13 +22,17 @@ from docint.config import (
     MODEL_ANSWER,
     MODEL_VERIFY,
     RETRIEVAL_TOP_K,
+    VERIFY_MAX_WORKERS,
     usd_cost,
 )
 from docint.index import build_filters, open_index, scope_document_types
+from docint.record import load_by_document_id, render as render_record
+from docint.respond import synthesize
 from docint.trace import save as save_trace
 from docint.models import (
     Citation,
     Claim,
+    Document,
     DraftAnswer,
     GenerationRound,
     QueryTrace,
@@ -48,7 +54,28 @@ def _render(nodes) -> str:
     )
 
 
-def _generate(question: str, nodes, rejections: list[StrippedClaim]) -> tuple[DraftAnswer, float]:
+def _render_records(records: list[Document]) -> str:
+    """The typed records as the answer model sees them.
+
+    Given only prose, the model re-derives figures the extraction stage already read
+    carefully - with an evidence quote checked against the chunk it came from. Showing
+    the record instead means the number in an answer is the number in the record, and
+    both resolve to the same chunk.
+    """
+    if not records:
+        return ""
+    rendered = "\n\n".join(render_record(r) for r in records)
+    return (
+        "\n\nTyped fields already extracted from these same documents, each tagged with "
+        "the chunk_id it was read from. Prefer these over re-reading a figure out of the "
+        "raw text. When a claim rests on one, cite that field's chunk_id. A field marked "
+        "NOT PRESENT is absent from the document: say so rather than substituting a "
+        "value from elsewhere.\n"
+        f"<records>\n{rendered}\n</records>")
+
+
+def _generate(question: str, nodes, records: list[Document],
+              rejections: list[StrippedClaim]) -> tuple[DraftAnswer, float]:
     feedback = ""
     if rejections:
         lines = "\n".join(f"- {s.text!r} was rejected: {s.reason}" for s in rejections)
@@ -61,16 +88,17 @@ def _generate(question: str, nodes, rejections: list[StrippedClaim]) -> tuple[Dr
     llm = ChatAnthropic(model=MODEL_ANSWER, max_tokens=4096)
     result = llm.with_structured_output(DraftAnswer, include_raw=True).invoke(
         f"{UNTRUSTED}\n\n"
-        "Answer the question using ONLY the chunks below. Break the answer into "
-        "individual factual claims. Every claim must cite the chunk_id(s) that directly "
-        "support it, copied exactly from the headers. Do not cite a chunk that does not "
-        "contain the supporting text.\n\n"
+        "Answer the question using ONLY the chunks below and the typed records derived "
+        "from them. Break the answer into individual factual claims. Every claim must "
+        "cite the chunk_id(s) that directly support it, copied exactly from the headers. "
+        "Do not cite a chunk that does not contain the supporting text.\n\n"
         "Set answers_question=false if the chunks do not let you answer the question "
         "that was asked - even if you can state true facts from them, and even if they "
         "answer part of it. Answering half of a two-part question is not answering it. "
         "When you set it false, say in `answer` what is missing and what you would need."
         f"{feedback}\n\n"
         f"<question>{question}</question>\n\n<chunks>\n{_render(nodes)}\n</chunks>"
+        f"{_render_records(records)}"
     )
     raw = result.get("raw")
     usage = (raw.usage_metadata or {}) if raw is not None else {}
@@ -132,14 +160,22 @@ def is_refusal(kept: list[Claim], draft: DraftAnswer) -> bool:
 
 def answer_question(question: str, principal: str, access_tags: frozenset[str],
                     *, index=None, max_rounds: int = 2,
-                    inject: Literal["none", "once", "always"] = "none") -> QueryTrace:
+                    inject: Literal["none", "once", "always"] = "none",
+                    on_event: Callable[..., None] | None = None) -> QueryTrace:
     """Answer a question, or decline to.
 
     `inject` plants FAULT_CLAIM before verification: "once" should be stripped and
     recovered from, "always" should exhaust the attempts and refuse. The round records
     it, so a stripped claim in a report is never mistaken for a real hallucination.
+
+    `on_event` narrates progress for an interactive caller. It reports what the pipeline
+    is DOING; the saved trace remains the only account of what it CONCLUDED.
     """
     started = time.perf_counter()
+
+    def emit(event: str, **fields) -> None:
+        if on_event is not None:
+            on_event(event, **fields)
     trace = QueryTrace(trace_id=uuid.uuid4().hex[:12], question=question,
                        principal=principal, access_tags=sorted(access_tags))
 
@@ -158,6 +194,7 @@ def answer_question(question: str, principal: str, access_tags: frozenset[str],
     nodes = [n for n in nodes if n.score is None or n.score >= MIN_RETRIEVAL_SCORE]
     trace.retrieved_chunk_ids = [n.node.id_ for n in nodes]
     trace.retrieved_documents = sorted({n.node.metadata["filename"] for n in nodes})
+    emit("retrieved", chunks=len(nodes), documents=len(trace.retrieved_documents))
 
     if not nodes:
         trace.final_status = "refused"
@@ -168,11 +205,23 @@ def answer_question(question: str, principal: str, access_tags: frozenset[str],
         return trace
 
     by_id = {n.node.id_: n for n in nodes}
+
+    # Typed records for the documents retrieval already cleared. Keyed off the
+    # retrieved set, so the store-side ACL governs these too: a record can only reach
+    # the prompt if a chunk of its document legitimately did.
+    stored = load_by_document_id()
+    records: list[Document] = [stored[did] for did in
+                               sorted({n.node.metadata["document_id"] for n in nodes})
+                               if did in stored]
+    trace.structured_records = [r.filename for r in records]
+    emit("records", documents=len(records))
+
     rejections: list[StrippedClaim] = []
 
     for round_index in range(max_rounds):
         rnd = GenerationRound(round_index=round_index)
-        draft, cost = _generate(question, nodes, rejections)
+        emit("drafting", round_index=round_index)
+        draft, cost = _generate(question, nodes, records, rejections)
         rnd.cost_usd += cost
 
         if inject == "always" or (inject == "once" and round_index == 0):
@@ -181,10 +230,12 @@ def answer_question(question: str, principal: str, access_tags: frozenset[str],
             rnd.injected_claim = FAULT_CLAIM
 
         rnd.claims = draft.claims
+        emit("drafted", claims=len(draft.claims))
 
-        kept: list[Claim] = []
+        # Deterministic gate for every claim first: an unresolvable ID is not worth a
+        # model call, so the calls that follow are exactly the claims worth paying for.
+        pending: list[tuple[Claim, list[str], list[tuple[str, str]]]] = []
         for claim in draft.claims:
-            # Deterministic gate first: an unresolvable ID is not worth a model call.
             valid = [cid for cid in claim.cited_chunk_ids if cid in by_id]
             invalid = [cid for cid in claim.cited_chunk_ids if cid not in by_id]
             rnd.invalid_citations.extend(invalid)
@@ -193,14 +244,30 @@ def answer_question(question: str, principal: str, access_tags: frozenset[str],
                     text=claim.text, cited_chunk_ids=claim.cited_chunk_ids,
                     reason=f"cited chunk id(s) {invalid} are not in the retrieved set"))
                 continue
-
             sources = [(f"{by_id[cid].node.metadata['filename']} - "
                         f"{by_id[cid].node.metadata['location']}", by_id[cid].node.text)
                        for cid in valid]
-            verdict, vcost = _verify(claim.text, sources)
+            pending.append((claim, valid, sources))
+
+        # Verified concurrently. Each call sees one claim and that claim's own cited
+        # chunks and nothing else, so there is no shared state to serialise around.
+        # Futures are read in submission order, so the trace still reads in the order
+        # the model made the claims.
+        emit("verifying", total=len(pending))
+        verifications: list[tuple[Verdict, float]] = []
+        if pending:
+            with ThreadPoolExecutor(max_workers=VERIFY_MAX_WORKERS) as pool:
+                futures = [pool.submit(_verify, claim.text, sources)
+                           for claim, _, sources in pending]
+                for future in futures:
+                    verdict, vcost = future.result()
+                    verifications.append((verdict, vcost))
+                    emit("verified", supported=verdict.supported)
+
+        kept: list[Claim] = []
+        for (claim, valid, _), (verdict, vcost) in zip(pending, verifications):
             rnd.cost_usd += vcost
             rnd.verdicts.append((claim.text, verdict))
-
             if verdict.supported:
                 kept.append(Claim(text=claim.text, cited_chunk_ids=valid))
             else:
@@ -208,6 +275,7 @@ def answer_question(question: str, principal: str, access_tags: frozenset[str],
                     text=claim.text, cited_chunk_ids=claim.cited_chunk_ids,
                     reason=verdict.reason))
 
+        emit("round_done", verified=len(kept), stripped=len(rnd.stripped))
         trace.rounds.append(rnd)
         trace.total_cost_usd += rnd.cost_usd
 
@@ -243,11 +311,23 @@ def answer_question(question: str, principal: str, access_tags: frozenset[str],
         rejections = rnd.stripped
         if round_index + 1 < max_rounds:
             trace.regeneration_count += 1
+            emit("regenerating", stripped=len(rnd.stripped))
         else:
             trace.final_status = "refused"
             trace.refusal_reason = (
                 f"{len(rnd.stripped)} claim(s) could not be supported by their own cited "
                 f"sources after {max_rounds} attempts")
+
+    # Synthesis runs only on an answer. A refusal already has its reason, and putting a
+    # second model between the user and "I cannot answer this" adds a way to get it
+    # wrong. Built from kept_claims alone, so it can introduce nothing they do not say.
+    if trace.final_status == "answered":
+        emit("synthesizing", claims=len(trace.kept_claims))
+        chunk_meta = {cid: {"document_id": by_id[cid].node.metadata["document_id"],
+                            "filename": by_id[cid].node.metadata["filename"]}
+                      for cid in by_id}
+        trace.response, cost = synthesize(question, trace.kept_claims, chunk_meta)
+        trace.total_cost_usd += cost
 
     trace.total_latency_s = time.perf_counter() - started
     # Persisted here, not in the CLI: an answer without an audit record is the failure

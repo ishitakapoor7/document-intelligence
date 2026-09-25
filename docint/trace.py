@@ -46,58 +46,78 @@ def _wrap(text: str, width: int = 88, indent: str = "  ") -> str:
                          subsequent_indent=indent)
 
 
-def render(trace: QueryTrace) -> str:
-    """The terminal view of a trace, rendered entirely from the JSON."""
+def render(trace: QueryTrace, verbose: bool = False) -> str:
+    """The terminal view of a trace, rendered entirely from the JSON.
+
+    Concise by default: someone who asked a question wants the answer, not the
+    pipeline's working. `verbose` adds what the run did - who asked, what was
+    retrievable to them, what was stripped - which is a operator and demo view, not a
+    user one. Everything in either view comes from the same saved trace.
+    """
     out: list[str] = []
     add = out.append
 
-    add(f"\n{BOLD}{trace.question}{RESET}")
-    add(f"{DIM}  as {trace.principal}  ·  access_tags {trace.access_tags}"
-        f"  ·  type filter {trace.type_filter or 'none'}{RESET}")
+    if verbose:
+        add(f"\n{BOLD}{trace.question}{RESET}")
+        add(f"{DIM}  as {trace.principal}  ·  access_tags {trace.access_tags}"
+            f"  ·  type filter {trace.type_filter or 'none'}{RESET}")
 
-    add(f"\n  retrieved   {len(trace.retrieved_chunk_ids)} chunks from "
-        f"{len(trace.retrieved_documents)} document(s): "
-        f"{', '.join(trace.retrieved_documents) or 'nothing accessible'}")
+        add(f"\n  retrieved   {len(trace.retrieved_chunk_ids)} chunks from "
+            f"{len(trace.retrieved_documents)} document(s): "
+            f"{', '.join(trace.retrieved_documents) or 'nothing accessible'}")
+        if trace.structured_records:
+            add(f"  records     typed fields for {', '.join(trace.structured_records)}")
 
-    for rnd in trace.rounds:
-        verified = sum(1 for _, v in rnd.verdicts if v.supported)
-        add(f"  round {rnd.round_index}     {len(rnd.claims)} claim(s) drafted, "
-            f"{verified} verified, {len(rnd.stripped)} stripped"
-            + (f", {len(rnd.invalid_citations)} unresolvable citation(s)"
-               if rnd.invalid_citations else ""))
-        for s in rnd.stripped:
-            add(f"    {BOLD}STRIPPED{RESET}  {s.text}")
-            # Verdicts run to several paragraphs and would swamp the answer. The
-            # full reasoning is in the trace JSON.
-            reason = " ".join(s.reason.split())
-            if len(reason) > 180:
-                reason = reason[:177] + "..."
-            add(f"              {DIM}{reason}{RESET}")
+        for rnd in trace.rounds:
+            verified = sum(1 for _, v in rnd.verdicts if v.supported)
+            add(f"  round {rnd.round_index}     {len(rnd.claims)} claim(s) drafted, "
+                f"{verified} verified, {len(rnd.stripped)} stripped"
+                + (f", {len(rnd.invalid_citations)} unresolvable citation(s)"
+                   if rnd.invalid_citations else ""))
+            for s in rnd.stripped:
+                add(f"    {BOLD}STRIPPED{RESET}  {s.text}")
+                reason = " ".join(s.reason.split())
+                if len(reason) > 180:
+                    reason = reason[:177] + "..."
+                add(f"              {DIM}{reason}{RESET}")
 
-    if trace.regeneration_count:
-        add(f"  {DIM}regenerated {trace.regeneration_count}x with the rejection reasons "
-            f"fed back{RESET}")
+        if trace.regeneration_count:
+            add(f"  {DIM}regenerated {trace.regeneration_count}x with the rejection "
+                f"reasons fed back{RESET}")
 
     if trace.final_status == "answered":
-        # Numbered markers are a display convenience only. The trace, the citations
-        # and `docint show` all address chunks by their real id; the numbers exist so
-        # a claim reads like a sentence with a footnote rather than a hash.
-        number = {c.chunk_id: i for i, c in enumerate(trace.final_citations, start=1)}
+        # Only what the answer rests on is shown. The full claim record stays in the
+        # trace JSON: eight atomic claims are what the verifier needs and the wrong
+        # thing to hand someone who asked a yes/no question.
+        if trace.response is not None:
+            shown = {e.chunk_id for e in trace.response.evidence}
+            references = [c for c in trace.final_citations if c.chunk_id in shown]
+        else:
+            references = trace.final_citations
+        number = {c.chunk_id: i for i, c in enumerate(references, start=1)}
 
-        # The answer is built from the verified claims, not from the model's prose.
-        # Each sentence carries the reference it survived verification against, and
-        # nothing unverified appears above the references. The original prose stays
-        # in the trace as `final_answer`.
-        add(f"\n{BOLD}ANSWER{RESET}")
-        cited = []
-        for claim in trace.kept_claims:
-            marks = "".join(f"({number[cid]})" for cid in claim.cited_chunk_ids
-                            if cid in number)
-            cited.append(f"{claim.text.rstrip()} {marks}")
-        add(_wrap(" ".join(cited)))
+        if trace.response is not None:
+            # `answer` is the machine-readable verdict and is deliberately not printed:
+            # it describes the SHAPE of the question, so "NOT APPLICABLE" above a
+            # correct answer reads as a refusal. A yes/no verdict is already the first
+            # word of the summary.
+            add(f"\n{BOLD}ANSWER{RESET}")
+            add(_wrap(trace.response.summary))
+            if trace.response.evidence:
+                add(f"\n{BOLD}EVIDENCE{RESET}")
+                for e in trace.response.evidence:
+                    mark = f"({number[e.chunk_id]})" if e.chunk_id in number else ""
+                    add(_wrap(f"{e.claim.rstrip()} {mark}", indent="    "))
+        else:
+            # A trace written before response synthesis existed.
+            add(f"\n{BOLD}ANSWER{RESET}")
+            add(_wrap(" ".join(
+                f"{c.text.rstrip()} "
+                + "".join(f"({number[cid]})" for cid in c.cited_chunk_ids if cid in number)
+                for c in trace.kept_claims)))
 
         add(f"\n{BOLD}REFERENCES{RESET}")
-        for c in trace.final_citations:
+        for c in references:
             add(f"  ({number[c.chunk_id]})  {c.filename} · {c.location}"
                 f"{DIM}   {c.chunk_id}  ·  {describe_recognition(c.recognition, c.ocr_confidence)}{RESET}")
     else:
@@ -106,6 +126,7 @@ def render(trace: QueryTrace) -> str:
             if para.strip():
                 add(_wrap(para.strip()))
 
-    add(f"\n{DIM}  ${trace.total_cost_usd:.4f}  ·  {trace.total_latency_s:.1f}s  ·  "
-        f"trace {trace.trace_id}{RESET}\n")
+    if verbose:
+        add(f"\n{DIM}  ${trace.total_cost_usd:.4f}  ·  {trace.total_latency_s:.1f}s  ·  "
+            f"trace {trace.trace_id}{RESET}")
     return "\n".join(out)
