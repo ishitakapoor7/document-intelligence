@@ -95,7 +95,12 @@ def _generate(question: str, nodes, records: list[Document],
         "Set answers_question=false if the chunks do not let you answer the question "
         "that was asked - even if you can state true facts from them, and even if they "
         "answer part of it. Answering half of a two-part question is not answering it. "
-        "When you set it false, say in `answer` what is missing and what you would need."
+        # A refusal is read by someone who just learned they are not getting an answer.
+        # Unbounded, the model inventories what the chunks DO hold and everything it
+        # would need, and the refusal ends up longer than the answer would have been.
+        "When you set it false, `answer` must be AT MOST TWO SENTENCES naming what is "
+        "missing. Do not list what the chunks do contain, do not enumerate the fields "
+        "you would need, and do not restate values from them."
         f"{feedback}\n\n"
         f"<question>{question}</question>\n\n<chunks>\n{_render(nodes)}\n</chunks>"
         f"{_render_records(records)}"

@@ -121,7 +121,10 @@ def render(trace: QueryTrace, verbose: bool = False) -> str:
             add(f"  ({number[c.chunk_id]})  {c.filename} · {c.location}"
                 f"{DIM}   {c.chunk_id}  ·  {describe_recognition(c.recognition, c.ocr_confidence)}{RESET}")
     else:
-        add(f"\n{BOLD}{trace.final_status.upper()}{RESET}")
+        # "REFUSED" reads to the person asking as though they were refused. The system
+        # is declining to answer, which is a statement about the evidence.
+        label = "NO ANSWER" if trace.final_status == "refused" else trace.final_status.upper()
+        add(f"\n{BOLD}{label}{RESET}")
         for para in (trace.refusal_reason or "").split("\n\n"):
             if para.strip():
                 add(_wrap(para.strip()))
